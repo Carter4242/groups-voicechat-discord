@@ -27,8 +27,6 @@ public final class Core {
     public static ArrayList<DiscordBot> bots = new ArrayList<>();
     public static int debugLevel = 0;
 
-    private static boolean nativesLoaded = false;
-
     private static native void initializeNatives();
 
     private static native void setDebugLevel(int debugLevel);
@@ -39,15 +37,12 @@ public final class Core {
         // This should happen first
         checkSimpleVoiceChatVersion(platform.getSimpleVoiceChatVersion());
 
-        if (!nativesLoaded) {
-            try {
-                nativesLoaded = true;
-                LibraryLoader.load("voicechat_discord");
-                initializeNatives();
-            } catch (Throwable e) {
-                platform.error("Failed to load natives: " + e);
-                throw new RuntimeException(e);
-            }
+        try {
+            LibraryLoader.load("voicechat_discord");
+            initializeNatives();
+        } catch (Throwable e) {
+            platform.error("Failed to load natives: " + e);
+            throw new RuntimeException(e);
         }
 
         loadConfig();
