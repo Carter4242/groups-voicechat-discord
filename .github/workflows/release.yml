@@ -114,11 +114,12 @@ jobs:
       - name: Build
         run: ./gradlew build
 
+      - name: Remove raw and shadow jars
+        run: rm -f paper/build/libs/voicechat-discord-paper-*-raw.jar paper/build/libs/voicechat-discord-paper-*-shadow.jar
+
       - name: Upload final jar
         uses: actions/upload-artifact@v4
         with:
           name: voicechat-discord-final-jar
           path: paper/build/libs/voicechat-discord-paper-[0-9]*.jar
-          !paper/build/libs/voicechat-discord-paper-[0-9]*-raw.jar
-          !paper/build/libs/voicechat-discord-paper-[0-9]*-shadow.jar
           if-no-files-found: error
