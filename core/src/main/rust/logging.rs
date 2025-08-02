@@ -73,10 +73,17 @@ impl<S: tracing::Subscriber> Layer<S> for CustomFilter {
 }
 
 pub fn ensure_init() {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("voicechat_discord.log")
+        .expect("Unable to open log file");
     let (filter, reload_handle) = reload::Layer::new(CustomFilter::new(Level::WARN));
     if tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer())
+        .with(fmt::layer().with_writer(file))
         .try_init()
         .is_err()
     {
