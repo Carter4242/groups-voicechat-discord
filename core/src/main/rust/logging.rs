@@ -74,7 +74,6 @@ impl<S: tracing::Subscriber> Layer<S> for CustomFilter {
 
 pub fn ensure_init() {
     use std::fs::OpenOptions;
-    use std::io::Write;
     let file = OpenOptions::new()
         .create(true)
         .append(true)

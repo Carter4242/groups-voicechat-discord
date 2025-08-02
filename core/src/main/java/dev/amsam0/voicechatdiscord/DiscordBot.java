@@ -24,8 +24,12 @@ public final class DiscordBot {
     public void addPlayerToGroup(ServerPlayer player) {
         if (listeners.containsKey(player.getUuid())) return;
         var connection = api.getConnectionOf(player);
-        if (connection == null) return;
+        if (connection == null) {
+            platform.warn("No connection found for player " + platform.getName(player) + " (" + player.getUuid() + ")");
+            return;
+        }
 
+        platform.debug("Attempting to register audio listener for " + platform.getName(player) + " (" + player.getUuid() + ")");
         AudioListener listener = api.playerAudioListenerBuilder()
                 .setPacketListener(packet -> handlePacket(packet, player))
                 .setPlayer(player.getUuid())
@@ -33,11 +37,15 @@ public final class DiscordBot {
         api.registerAudioListener(listener);
         listeners.put(player.getUuid(), listener);
 
+        platform.debug("Attempting to create audio sender for connection: " + connection);
         AudioSender sender = api.createAudioSender(connection);
-        if (api.registerAudioSender(sender)) {
+        platform.debug("AudioSender created: " + sender);
+        boolean registered = api.registerAudioSender(sender);
+        platform.debug("registerAudioSender returned: " + registered);
+        if (registered) {
             senders.put(player.getUuid(), sender);
         } else {
-            platform.error("Couldn't register audio sender for " + platform.getName(player));
+            platform.error("Couldn't register audio sender for " + platform.getName(player) + ". Connection: " + connection + ", Sender: " + sender);
         }
     }
 
@@ -162,8 +170,12 @@ public final class DiscordBot {
 
             for (ServerPlayer player : groupPlayers) {
                 var connection = api.getConnectionOf(player);
-                if (connection == null) continue;
+                if (connection == null) {
+                    platform.warn("No connection found for player " + platform.getName(player) + " (" + player.getUuid() + ")");
+                    continue;
+                }
 
+                platform.debug("Attempting to register audio listener for " + platform.getName(player) + " (" + player.getUuid() + ")");
                 AudioListener listener = api.playerAudioListenerBuilder()
                         .setPacketListener(packet -> handlePacket(packet, player))
                         .setPlayer(player.getUuid())
@@ -171,11 +183,15 @@ public final class DiscordBot {
                 api.registerAudioListener(listener);
                 listeners.put(player.getUuid(), listener);
 
+                platform.debug("Attempting to create audio sender for connection: " + connection);
                 AudioSender sender = api.createAudioSender(connection);
-                if (api.registerAudioSender(sender)) {
+                platform.debug("AudioSender created: " + sender);
+                boolean registered = api.registerAudioSender(sender);
+                platform.debug("registerAudioSender returned: " + registered);
+                if (registered) {
                     senders.put(player.getUuid(), sender);
                 } else {
-                    platform.error("Couldn't register audio sender for " + platform.getName(player));
+                    platform.error("Couldn't register audio sender for " + platform.getName(player) + ". Connection: " + connection + ", Sender: " + sender);
                 }
             }
 
