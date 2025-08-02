@@ -33,37 +33,7 @@ public final class PaperPlugin extends JavaPlugin {
             platform = new PaperPlatform();
         }
 
-        try {
-            var parsed = Version.parse(getServer().getMinecraftVersion(), false);
-
-            var wantedCommandHelper = Version.of(1, 20, 6);
-            if (parsed.isHigherThanOrEquivalentTo(wantedCommandHelper)) {
-                platform.info("Server is >=1.20.6");
-                commandHelper = new Post_1_20_6_CommandHelper();
-            } else {
-                platform.info("Server is <1.20.6");
-                commandHelper = new Pre_1_20_6_CommandHelper();
-            }
-        } catch (IllegalArgumentException | ParseException e) {
-            var v = getServer().getMinecraftVersion();
-            platform.error("Unable to parse server version (" + v + ")", e);
-
-            if (v.equals("1.19.4") ||
-                    v.equals("1.20") ||
-                    v.equals("1.20.0") ||
-                    v.equals("1.20.1") ||
-                    v.equals("1.20.2") ||
-                    v.equals("1.20.3") ||
-                    v.equals("1.20.4") ||
-                    v.equals("1.20.5")
-            ) {
-                platform.info("Server is most likely <1.20.6");
-                commandHelper = new Pre_1_20_6_CommandHelper();
-            } else {
-                platform.info("Server is most likely >=1.20.6");
-                commandHelper = new Post_1_20_6_CommandHelper();
-            }
-        }
+        commandHelper = new Post_1_20_6_CommandHelper();
 
         BukkitVoicechatService service = getServer().getServicesManager().load(BukkitVoicechatService.class);
         if (service != null) {
