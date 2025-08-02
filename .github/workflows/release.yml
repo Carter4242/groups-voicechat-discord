@@ -112,5 +112,3 @@ jobs:
 
       - name: Build
         run: ./gradlew build
-        env:
-          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
