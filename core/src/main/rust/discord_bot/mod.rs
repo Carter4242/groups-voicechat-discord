@@ -169,6 +169,39 @@ impl DiscordBot {
 
         Ok(())
     }
+
+    pub fn add_player_to_group(&mut self, sender_id: i32) {
+        if let Some(state) = self.state.try_write() {
+            if let State::Started { senders, .. } = &mut *state {
+                if !senders.contains_key(&sender_id) {
+                    let (audio_buffer_tx, audio_buffer_rx) = flume::bounded(MAX_AUDIO_BUFFER);
+                    senders.insert(
+                        sender_id,
+                        Sender {
+                            audio_buffer_tx,
+                            audio_buffer_rx,
+                            decoder: Mutex::new(
+                                songbird::driver::opus::coder::Decoder::new(OPUS_SAMPLE_RATE, OPUS_CHANNELS)
+                                    .expect("Unable to make opus decoder"),
+                            ),
+                            last_audio_received: Mutex::new(None),
+                        },
+                    );
+                    debug!("Added sender {} to group", sender_id);
+                }
+            }
+        }
+    }
+
+    pub fn remove_player_from_group(&mut self, sender_id: i32) {
+        if let Some(state) = self.state.try_write() {
+            if let State::Started { senders, .. } = &mut *state {
+                if senders.remove(&sender_id).is_some() {
+                    debug!("Removed sender {} from group", sender_id);
+                }
+            }
+        }
+    }
 }
 
 impl Drop for DiscordBot {

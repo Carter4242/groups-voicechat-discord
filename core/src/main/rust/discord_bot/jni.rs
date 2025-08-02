@@ -161,3 +161,25 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1resetSender
         );
     }
 }
+
+#[no_mangle]
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addPlayerToGroup(
+    _env: JNIEnv,
+    _obj: jobject,
+    ptr: jlong,
+    sender_id: jint,
+) {
+    let discord_bot = unsafe { &mut *(ptr as *mut super::DiscordBot) };
+    discord_bot.add_player_to_group(sender_id);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1removePlayerFromGroup(
+    _env: JNIEnv,
+    _obj: jobject,
+    ptr: jlong,
+    sender_id: jint,
+) {
+    let discord_bot = unsafe { &mut *(ptr as *mut super::DiscordBot) };
+    discord_bot.remove_player_from_group(sender_id);
+}

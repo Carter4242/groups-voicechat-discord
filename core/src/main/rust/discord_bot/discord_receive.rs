@@ -9,6 +9,7 @@ use tracing::{debug, trace, warn};
 pub struct VoiceHandler {
     pub vc_id: ChannelId,
     pub received_audio_tx: flume::Sender<Vec<u8>>,
+    pub senders: std::sync::Arc<dashmap::DashMap<i32, super::Sender>>,
 }
 
 #[serenity::async_trait]
@@ -28,7 +29,6 @@ impl EventHandler for VoiceHandler {
                 debug!("Missing packet");
                 return None;
             };
-            // https://github.com/serenity-rs/songbird/blob/5bbe80f20c2a7e4e889149672d8ae03f6450b9e8/src/driver/tasks/udp_rx/ssrc_state.rs#L86
             let Some(rtp) = RtpPacket::new(&data.packet) else {
                 warn!("Unable to parse packet");
                 return None;
@@ -36,8 +36,6 @@ impl EventHandler for VoiceHandler {
             let extension = rtp.get_extension() != 0;
 
             let payload = rtp.payload();
-
-            // https://github.com/serenity-rs/songbird/blob/5bbe80f20c2a7e4e889149672d8ae03f6450b9e8/src/driver/tasks/udp_rx/ssrc_state.rs#L153
             let payload = &payload[data.payload_offset..data.payload_end_pad];
             let start = if extension {
                 match RtpExtensionPacket::new(payload).map(|pkt| pkt.packet_size()) {
@@ -52,6 +50,11 @@ impl EventHandler for VoiceHandler {
             };
 
             let payload = payload[start..].to_vec();
+
+            // Route Discord audio to all current group members
+            for sender in self.senders.iter() {
+                let _ = sender.value().audio_buffer_tx.send(payload.clone());
+            }
 
             if self.received_audio_tx.send(payload).is_err() {
                 warn!("received_audio rx dropped");
