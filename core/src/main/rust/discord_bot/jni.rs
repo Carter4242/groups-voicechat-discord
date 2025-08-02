@@ -53,8 +53,18 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1start(
     _obj: jobject,
     ptr: jlong,
 ) -> JString<'_> {
+    tracing::info!("JNI DiscordBot__1start called with ptr: {:#x}", ptr);
+    if ptr == 0 {
+        tracing::error!("Received null pointer in DiscordBot__1start");
+        let value_on_throw = env
+            .new_string("<null pointer error>")
+            .expect("Couldn't create java string! Please file a GitHub issue");
+        return value_on_throw;
+    }
+
     // SAFETY: We temporarily wrap the pointer in an Arc, call start, then restore the raw pointer
     let discord_bot = unsafe { Arc::from_raw(ptr as *mut DiscordBot) };
+    tracing::info!("Arc::from_raw succeeded, calling DiscordBot::start");
 
     let value_on_throw = env
         .new_string("<error>")
@@ -62,10 +72,12 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1start(
 
     let result = super::DiscordBot::start(Arc::clone(&discord_bot))
         .map(|s| {
+            tracing::info!("DiscordBot::start succeeded, channel name: {}", s);
             env.new_string(s)
                 .expect("Couldn't create java string! Please file a GitHub issue")
         })
         .unwrap_or_throw(&mut env, value_on_throw);
+    tracing::info!("JNI DiscordBot__1start returning result");
     result
 }
 
