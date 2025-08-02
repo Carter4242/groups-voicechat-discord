@@ -18,7 +18,7 @@ import static dev.amsam0.voicechatdiscord.Constants.CONFIG_HEADER;
 import static dev.amsam0.voicechatdiscord.Constants.VOICECHAT_MIN_VERSION;
 
 /**
- * Core code between Paper and Fabric.
+ * Core code between Paper.
  */
 public final class Core {
     public static VoicechatServerApi api; // Initiated by VoicechatPlugin
@@ -179,14 +179,7 @@ public final class Core {
             if (splitVersion.length > 1) {
                 // Beta builds are fine since they will have the new APIs we depend on.
                 // If we don't remove the ending part, it will say SVC isn't new enough
-                if (platform.getLoader() == Platform.Loader.FABRIC) {
-                    // On fabric, the version is prefixed with the minecraft version
-                    // We don't care about the minecraft version
-                    version = splitVersion[1];
-                } else {
-                    // We're on Paper, we still want to get rid of the ending part (pre1)
-                    version = splitVersion[0];
-                }
+                version = splitVersion[0];
                 platform.debug("SVC version after normalizing: " + version);
             }
         }

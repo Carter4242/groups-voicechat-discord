@@ -63,8 +63,7 @@ public interface Platform {
     }
 
     enum Loader {
-        PAPER("paper"),
-        FABRIC("fabric");
+        PAPER("paper");
 
         public final String modrinthName;
 

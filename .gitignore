@@ -5,3 +5,5 @@ build/
 run/
 .DS_Store
 config.yml
+core/bin/*
+paper/bin/*

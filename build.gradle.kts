@@ -1,16 +1,37 @@
-tasks.register<GradleBuild>("build") {
+
+val nativeTargets = listOf(
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+    "i686-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu"
+)
+
+tasks.register<Copy>("copyNativesToResources") {
     group = "voicechat-discord"
-    tasks = listOf(
-            ":paper:build",
-            ":fabric:build"
-    )
+    description = "Copy all native binaries from target/release to resources/natives for packaging"
+    nativeTargets.forEach { target ->
+        val destDir = when {
+            target.contains("linux") && target.contains("aarch64") -> "linux-aarch64"
+            target.contains("linux") && target.contains("x86_64") -> "linux-x64"
+            target.contains("linux") && target.contains("i686") -> "linux-x86"
+            target.contains("apple") && target.contains("aarch64") -> "mac-aarch64"
+            target.contains("apple") && target.contains("x86_64") -> "mac-x64"
+            target.contains("windows") && target.contains("x86_64") -> "windows-x64"
+            else -> target
+        }
+        from("core/target/$target/release/") {
+            include("libvoicechat_discord.so", "libvoicechat_discord.dylib", "voicechat_discord.dll")
+        }
+        into("core/src/main/resources/natives/$destDir/")
+    }
 }
 
-tasks.register<GradleBuild>("publish") {
+tasks.register<GradleBuild>("build") {
     group = "voicechat-discord"
+    dependsOn("copyNativesToResources")
     tasks = listOf(
-            ":core:modrinthSyncBody",
-            ":paper:modrinth",
-            ":fabric:modrinth"
+        ":paper:build",
     )
 }
