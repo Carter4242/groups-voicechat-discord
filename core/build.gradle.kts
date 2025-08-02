@@ -19,7 +19,6 @@ tasks.register<Copy>("processSources") {
 
     val properties = mapOf(
         "version" to Properties.pluginVersion,
-        "modrinthProjectId" to Properties.modrinthProjectId,
         "voicechatApiVersion" to Properties.voicechatApiVersion,
     )
     inputs.properties(properties)
@@ -65,11 +64,4 @@ repositories {
     maven { url = uri("https://jitpack.io") }
     maven { url = uri("https://libraries.minecraft.net") }
     mavenLocal()
-}
-
-modrinth {
-    token.set(System.getenv("MODRINTH_TOKEN"))
-    projectId.set(Properties.modrinthProjectId)
-    syncBodyFrom.set(rootProject.file("README.md").inputStream().bufferedReader().use { it.readText() })
-    debugMode.set(System.getenv("MODRINTH_DEBUG") != null)
 }
