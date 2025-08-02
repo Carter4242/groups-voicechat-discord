@@ -41,9 +41,9 @@ public final class Core {
 
         if (!nativesLoaded) {
             try {
+                nativesLoaded = true;
                 LibraryLoader.load("voicechat_discord");
                 initializeNatives();
-                nativesLoaded = true;
             } catch (Throwable e) {
                 platform.error("Failed to load natives: " + e);
                 throw new RuntimeException(e);
