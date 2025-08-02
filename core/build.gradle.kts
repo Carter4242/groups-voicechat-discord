@@ -1,3 +1,4 @@
+
 plugins {
     java
     id("shared-plugins")
@@ -8,6 +9,10 @@ project.group = Properties.mavenGroup
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(Properties.javaVersion))
+}
+
+tasks.processResources {
+    dependsOn(":copyNativesToResources")
 }
 
 tasks.jar {
