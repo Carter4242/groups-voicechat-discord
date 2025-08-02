@@ -1,10 +1,6 @@
 
 val nativeTargets = listOf(
-    "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-gnu",
-    "i686-unknown-linux-gnu",
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
     "x86_64-pc-windows-gnu"
 )
 
@@ -13,9 +9,7 @@ tasks.register<Copy>("copyNativesToResources") {
     description = "Copy all native binaries from target/release to resources/natives for packaging"
     nativeTargets.forEach { target ->
         val destDir = when {
-            target.contains("linux") && target.contains("aarch64") -> "linux-aarch64"
             target.contains("linux") && target.contains("x86_64") -> "linux-x64"
-            target.contains("linux") && target.contains("i686") -> "linux-x86"
             target.contains("windows") && target.contains("x86_64") -> "windows-x64"
             else -> target
         }

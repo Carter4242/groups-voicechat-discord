@@ -26,12 +26,6 @@ jobs:
             triple: pc-windows-gnu
             filename: voicechat_discord.dll
 
-          - os: ubuntu-22.04
-            arch: aarch64
-            install: sudo apt-get install -y gcc-aarch64-linux-gnu
-          - os: ubuntu-22.04
-            arch: i686
-            install: sudo apt-get install -y gcc-i686-linux-gnu
     runs-on: ${{ matrix.os }}
     #container:
     #  image: ${{ matrix.container }}
@@ -74,23 +68,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download linux-aarch64
-        uses: actions/download-artifact@v4
-        with:
-          name: natives-aarch64-unknown-linux-gnu
-          path: core/src/main/resources/natives/linux-aarch64/
-
       - name: Download linux-x64
         uses: actions/download-artifact@v4
         with:
           name: natives-x86_64-unknown-linux-gnu
           path: core/src/main/resources/natives/linux-x64/
-
-      - name: Download linux-x86
-        uses: actions/download-artifact@v4
-        with:
-          name: natives-i686-unknown-linux-gnu
-          path: core/src/main/resources/natives/linux-x86/
 
       - name: Download windows-x64
         uses: actions/download-artifact@v4
