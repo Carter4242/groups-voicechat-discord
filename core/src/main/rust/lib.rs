@@ -49,6 +49,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_Core_initializeNatives<'
     _class: JClass<'local>,
 ) {
     logging::ensure_init();
+    info!("[TEST] tracing initialized in Java_dev_amsam0_voicechatdiscord_Core_initializeNatives");
     info!("Initializing rustls");
     if rustls::crypto::ring::default_provider()
         .install_default()
