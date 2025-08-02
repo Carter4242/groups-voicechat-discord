@@ -2,18 +2,16 @@ name: Build and publish stable release
 
 on:
   push:
-    tags:
+    branches:
       - '*'
 
 jobs:
   natives:
     strategy:
       matrix:
-        os: [ubuntu-22.04, macos-latest, windows-latest]
+        os: [ubuntu-22.04, windows-latest]
         arch: [aarch64, x86_64, i686]
         exclude:
-          - os: macos-latest
-            arch: i686
           - os: windows-latest
             arch: aarch64
           - os: windows-latest
@@ -24,9 +22,6 @@ jobs:
             filename: libvoicechat_discord.so
             pre-install: sudo apt-get update -y #&& sudo apt-get install -y curl
             #container: debian:buster
-          - os: macos-latest
-            triple: apple-darwin
-            filename: libvoicechat_discord.dylib
           - os: windows-latest
             triple: pc-windows-gnu
             filename: voicechat_discord.dll
@@ -51,12 +46,6 @@ jobs:
       - name: Install packages
         if: ${{ matrix.install }}
         run: ${{ matrix.install }}
-
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        if: ${{ contains(matrix.os, 'macos') }}
-        with:
-          xcode-version: latest-stable
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
@@ -102,18 +91,6 @@ jobs:
         with:
           name: natives-i686-unknown-linux-gnu
           path: core/src/main/resources/natives/linux-x86/
-
-      - name: Download mac-aarch64
-        uses: actions/download-artifact@v4
-        with:
-          name: natives-aarch64-apple-darwin
-          path: core/src/main/resources/natives/mac-aarch64/
-
-      - name: Download mac-x64
-        uses: actions/download-artifact@v4
-        with:
-          name: natives-x86_64-apple-darwin
-          path: core/src/main/resources/natives/mac-x64/
 
       - name: Download windows-x64
         uses: actions/download-artifact@v4
