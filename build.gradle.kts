@@ -16,8 +16,6 @@ tasks.register<Copy>("copyNativesToResources") {
             target.contains("linux") && target.contains("aarch64") -> "linux-aarch64"
             target.contains("linux") && target.contains("x86_64") -> "linux-x64"
             target.contains("linux") && target.contains("i686") -> "linux-x86"
-            target.contains("apple") && target.contains("aarch64") -> "mac-aarch64"
-            target.contains("apple") && target.contains("x86_64") -> "mac-x64"
             target.contains("windows") && target.contains("x86_64") -> "windows-x64"
             else -> target
         }

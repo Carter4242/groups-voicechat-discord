@@ -11,11 +11,9 @@ jobs:
   natives:
     strategy:
       matrix:
-        os: [ubuntu-22.04, macos-latest, windows-latest]
+        os: [ubuntu-22.04, windows-latest]
         arch: [aarch64, x86_64, i686]
         exclude:
-          - os: macos-latest
-            arch: i686
           - os: windows-latest
             arch: aarch64
           - os: windows-latest
@@ -26,9 +24,6 @@ jobs:
             filename: libvoicechat_discord.so
             pre-install: sudo apt-get update -y #&& apt-get install -y curl
             #container: debian:buster
-          - os: macos-latest
-            triple: apple-darwin
-            filename: libvoicechat_discord.dylib
           - os: windows-latest
             triple: pc-windows-gnu
             filename: voicechat_discord.dll
@@ -53,12 +48,6 @@ jobs:
       - name: Install packages
         if: ${{ matrix.install }}
         run: ${{ matrix.install }}
-
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        if: ${{ contains(matrix.os, 'macos') }}
-        with:
-          xcode-version: latest-stable
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
@@ -108,18 +97,6 @@ jobs:
           name: natives-i686-unknown-linux-gnu
           path: core/src/main/resources/natives/linux-x86/
 
-      - name: Download mac-aarch64
-        uses: actions/download-artifact@v4
-        with:
-          name: natives-aarch64-apple-darwin
-          path: core/src/main/resources/natives/mac-aarch64/
-
-      - name: Download mac-x64
-        uses: actions/download-artifact@v4
-        with:
-          name: natives-x86_64-apple-darwin
-          path: core/src/main/resources/natives/mac-x64/
-
       - name: Download windows-x64
         uses: actions/download-artifact@v4
         with:
@@ -154,13 +131,3 @@ jobs:
         with:
           name: voicechat-discord-paper-nightly.jar
           path: paper/build/libs/voicechat-discord-paper-${{ steps.version.outputs.version }}.jar
-
-      - name: Build fabric
-        run: ../gradlew build
-        working-directory: ./fabric
-
-      - name: Upload fabric artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: voicechat-discord-fabric-nightly.jar
-          path: fabric/build/libs/voicechat-discord-fabric-${{ steps.version.outputs.version }}.jar

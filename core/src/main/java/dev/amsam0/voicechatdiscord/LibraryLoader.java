@@ -23,9 +23,6 @@ public final class LibraryLoader {
         return OS_NAME.contains("win");
     }
 
-    private static boolean isMac() {
-        return OS_NAME.contains("mac");
-    }
 
     private static boolean isLinux() {
         return OS_NAME.contains("nux");
@@ -34,8 +31,6 @@ public final class LibraryLoader {
     private static String getPlatform() throws Exception {
         if (isWindows()) {
             return "windows";
-        } else if (isMac()) {
-            return "mac";
         } else if (isLinux()) {
             return "linux";
         } else {
@@ -55,8 +50,6 @@ public final class LibraryLoader {
     private static String getLibraryExtension() throws Exception {
         if (isWindows()) {
             return "dll";
-        } else if (isMac()) {
-            return "dylib";
         } else if (isLinux()) {
             return "so";
         } else {
