@@ -119,4 +119,6 @@ jobs:
         with:
           name: voicechat-discord-final-jar
           path: paper/build/libs/voicechat-discord-paper-[0-9]*.jar
+          !paper/build/libs/voicechat-discord-paper-[0-9]*-raw.jar
+          !paper/build/libs/voicechat-discord-paper-[0-9]*-shadow.jar
           if-no-files-found: error
