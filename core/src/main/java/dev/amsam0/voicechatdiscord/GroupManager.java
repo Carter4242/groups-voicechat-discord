@@ -20,6 +20,9 @@ public final class GroupManager {
     public static final BiMap<UUID, Integer> groupFriendlyIds = new BiMap<>();
     public static final Map<UUID, List<ServerPlayer>> groupPlayers = new HashMap<>();
 
+    // Tracks the first group created on the server
+    public static UUID firstGroupId = null;
+
     public static @Nullable String getPassword(Group group) {
         // https://github.com/henkelmax/enhanced-groups/blob/f5535f84fc41a2b1798b2b43adddcd6b6b28c22a/src/main/java/de/maxhenkel/enhancedgroups/events/ForceGroupTypeEvents.java#LL46C53-L57C10
         try {
@@ -50,6 +53,12 @@ public final class GroupManager {
         if (players.stream().noneMatch(serverPlayer -> serverPlayer.getUuid() == player.getUuid())) {
             platform.debug(player.getUuid() + " (" + platform.getName(player) + ") joined " + group.getId() + " (" + group.getName() + ")");
             players.add(player);
+            // If this is the first group, add player to DiscordBot
+            if (firstGroupId != null && firstGroupId.equals(group.getId())) {
+                if (!Core.bots.isEmpty()) {
+                    Core.bots.get(0).addPlayerToGroup(player);
+                }
+            }
         } else {
             platform.debug(player.getUuid() + " (" + platform.getName(player) + ") already joined " + group.getId() + " (" + group.getName() + ")");
         }
@@ -77,12 +86,23 @@ public final class GroupManager {
 
         List<ServerPlayer> players = getPlayers(group);
         players.remove(player);
+        // If this is the first group, remove player from DiscordBot
+        if (firstGroupId != null && firstGroupId.equals(group.getId())) {
+            if (!Core.bots.isEmpty()) {
+                Core.bots.get(0).removePlayerFromGroup(player);
+            }
+        }
     }
 
     @SuppressWarnings("DataFlowIssue")
     public static void onGroupCreated(CreateGroupEvent event) {
         Group group = event.getGroup();
         UUID groupId = group.getId();
+
+        if (firstGroupId == null) {
+            firstGroupId = groupId;
+            platform.info("First group created: " + group.getName() + " (" + groupId + ")");
+        }
 
         if (groupFriendlyIds.get(groupId) == null) {
             int friendlyId = 1;
@@ -112,6 +132,11 @@ public final class GroupManager {
         UUID groupId = group.getId();
 
         platform.debug(groupId + " (" + groupFriendlyIds.get(groupId) + ", " + group.getName() + ")" + " was removed");
+
+        if (firstGroupId != null && firstGroupId.equals(groupId)) {
+            platform.info("First group removed: " + group.getName() + " (" + groupId + ")");
+            firstGroupId = null;
+        }
 
         groupPlayers.remove(groupId);
         groupFriendlyIds.remove(groupId);
