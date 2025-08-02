@@ -4,7 +4,6 @@ import com.github.zafarkhaja.semver.ParseException;
 import com.github.zafarkhaja.semver.Version;
 import de.maxhenkel.voicechat.api.BukkitVoicechatService;
 import dev.amsam0.voicechatdiscord.post_1_20_6.Post_1_20_6_CommandHelper;
-import dev.amsam0.voicechatdiscord.pre_1_20_6.Pre_1_20_6_CommandHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bukkit.Bukkit;
