@@ -13,9 +13,9 @@ use super::State;
 
 impl super::DiscordBot {
     /// Returns the voice channel name
-    #[tracing::instrument(skip(self), fields(self.vc_id = %self.vc_id))]
-    pub fn start(&mut self) -> Result<String, Report> {
-        let mut state_lock = self.state.write();
+    #[tracing::instrument(skip(bot), fields(bot.vc_id = %bot.vc_id))]
+    pub fn start(bot: Arc<super::DiscordBot>) -> Result<String, Report> {
+        let mut state_lock = bot.state.write();
 
         let State::LoggedIn { http } = &*state_lock else {
             if matches!(*state_lock, State::Started { .. }) {
@@ -26,21 +26,22 @@ impl super::DiscordBot {
         };
 
         // In case there are any packets left over
-        self.received_audio_rx.drain();
+        bot.received_audio_rx.drain();
 
         let channel = match RUNTIME
-            .block_on(http.get_channel(self.vc_id))
+            .block_on(http.get_channel(bot.vc_id))
             .wrap_err("Couldn't get voice channel")?
         {
             Channel::Guild(c) if c.kind == ChannelType::Voice => c,
             _ => return Err(eyre!("The specified channel is not a voice channel.")),
         };
 
-        let songbird = self.songbird.clone();
-        let vc_id = self.vc_id;
+        let songbird = bot.songbird.clone();
+        let vc_id = bot.vc_id;
         let guild_id = channel.guild_id;
-        let received_audio_tx = self.received_audio_tx.clone();
+        let received_audio_tx = bot.received_audio_tx.clone();
         let senders = Arc::new(DashMap::new());
+        let bot_for_async = Arc::clone(&bot);
         {
             let senders = senders.clone();
             if let Err(e) = RUNTIME.block_on(async move {
@@ -55,6 +56,7 @@ impl super::DiscordBot {
                     VoiceHandler {
                         vc_id,
                         received_audio_tx,
+                        bot: Arc::clone(&bot_for_async),
                     },
                 );
 
@@ -63,7 +65,7 @@ impl super::DiscordBot {
 
                 eyre::Ok(())
             }) {
-                self.disconnect(guild_id);
+                bot.disconnect(guild_id);
                 return Err(e);
             }
         }

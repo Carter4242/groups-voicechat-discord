@@ -4,6 +4,7 @@ use jni::{
     JNIEnv,
 };
 use serenity::all::ChannelId;
+use std::sync::Arc;
 use tracing::info;
 
 use crate::ResultExt;
@@ -52,20 +53,20 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1start(
     _obj: jobject,
     ptr: jlong,
 ) -> JString<'_> {
-    let discord_bot = unsafe { &mut *(ptr as *mut DiscordBot) };
+    // SAFETY: We temporarily wrap the pointer in an Arc, call start, then restore the raw pointer
+    let discord_bot = unsafe { Arc::from_raw(ptr as *mut DiscordBot) };
 
-    // We must create the error string before the error is thrown or java gets really mad
     let value_on_throw = env
         .new_string("<error>")
         .expect("Couldn't create java string! Please file a GitHub issue");
 
-    discord_bot
-        .start()
+    let result = super::DiscordBot::start(Arc::clone(&discord_bot))
         .map(|s| {
             env.new_string(s)
                 .expect("Couldn't create java string! Please file a GitHub issue")
         })
-        .unwrap_or_throw(&mut env, value_on_throw)
+        .unwrap_or_throw(&mut env, value_on_throw);
+    result
 }
 
 #[no_mangle]

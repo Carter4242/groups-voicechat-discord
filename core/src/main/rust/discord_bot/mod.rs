@@ -19,7 +19,7 @@ use songbird::{
 use tokio::task::AbortHandle;
 use tracing::{debug, info, trace, warn};
 
-use crate::audio_util::{RawAudio, MAX_AUDIO_BUFFER};
+use crate::audio_util::{RawAudio, MAX_AUDIO_BUFFER, OPUS_SAMPLE_RATE, OPUS_CHANNELS};
 use crate::runtime::RUNTIME;
 
 mod discord_receive;
@@ -171,7 +171,7 @@ impl DiscordBot {
     }
 
     pub fn add_player_to_group(&mut self, sender_id: i32) {
-        if let Some(state) = self.state.try_write() {
+        if let Some(mut state) = self.state.try_write() {
             if let State::Started { senders, .. } = &mut *state {
                 if !senders.contains_key(&sender_id) {
                     let (audio_buffer_tx, audio_buffer_rx) = flume::bounded(MAX_AUDIO_BUFFER);
@@ -194,10 +194,43 @@ impl DiscordBot {
     }
 
     pub fn remove_player_from_group(&mut self, sender_id: i32) {
-        if let Some(state) = self.state.try_write() {
+        if let Some(mut state) = self.state.try_write() {
             if let State::Started { senders, .. } = &mut *state {
                 if senders.remove(&sender_id).is_some() {
                     debug!("Removed sender {} from group", sender_id);
+                }
+            }
+        }
+    }
+
+    /// Decode Opus payload once and send PCM to all group members
+    pub fn decode_and_route_to_groups(&self, payload: &[u8]) {
+        let State::Started { senders, .. } = &*self.state.read() else {
+            warn!("Bot is not started, cannot decode");
+            return;
+        };
+        for sender in senders.iter() {
+            if sender.value().audio_buffer_tx.is_full() {
+                warn!("Sender audio buffer is full");
+                continue;
+            }
+            let mut audio = vec![0i16; 960];
+            let decode_result = sender.value().decoder.lock().decode(
+                Some(payload.try_into().wrap_err("Invalid opus data").unwrap()),
+                (&mut audio).try_into().wrap_err("Unable to wrap output").unwrap(),
+                false,
+            );
+            match decode_result {
+                Ok(_) => {
+                    let len = audio.len();
+                    let raw_audio: [i16; 960] = audio.try_into().unwrap_or_else(|_| {
+                        warn!("Decoded audio is of length {len} when it should be 960");
+                        [0i16; 960]
+                    });
+                    let _ = sender.value().audio_buffer_tx.send(raw_audio);
+                }
+                Err(e) => {
+                    warn!("Unable to decode raw opus data: {e}");
                 }
             }
         }

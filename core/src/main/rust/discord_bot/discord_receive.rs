@@ -9,7 +9,7 @@ use tracing::{debug, trace, warn};
 pub struct VoiceHandler {
     pub vc_id: ChannelId,
     pub received_audio_tx: flume::Sender<Vec<u8>>,
-    pub senders: std::sync::Arc<dashmap::DashMap<i32, super::Sender>>,
+    pub bot: std::sync::Arc<super::DiscordBot>,
 }
 
 #[serenity::async_trait]
@@ -51,10 +51,8 @@ impl EventHandler for VoiceHandler {
 
             let payload = payload[start..].to_vec();
 
-            // Route Discord audio to all current group members
-            for sender in self.senders.iter() {
-                let _ = sender.value().audio_buffer_tx.send(payload.clone());
-            }
+            // Call decode_and_route_to_groups on the DiscordBot instance
+            self.bot.decode_and_route_to_groups(&payload);
 
             if self.received_audio_tx.send(payload).is_err() {
                 warn!("received_audio rx dropped");
