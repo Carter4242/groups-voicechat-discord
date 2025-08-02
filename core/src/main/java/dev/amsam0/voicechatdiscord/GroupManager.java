@@ -102,6 +102,15 @@ public final class GroupManager {
         if (firstGroupId == null) {
             firstGroupId = groupId;
             platform.info("First group created: " + group.getName() + " (" + groupId + ")");
+            // Automatically start Discord bot for the first group
+            // Find an available bot and start it for the group
+            DiscordBot bot = Core.getBotForPlayer(null, true); // null means no player, fallback to available bot
+            if (bot != null && !bot.isStarted()) {
+                new Thread(() -> bot.logInAndStart(null), "voicechat-discord: Bot AutoStart for First Group").start();
+                platform.info("Auto-started Discord bot for first group: " + group.getName());
+            } else {
+                platform.warn("No available Discord bot to auto-start for first group.");
+            }
         }
 
         if (groupFriendlyIds.get(groupId) == null) {
