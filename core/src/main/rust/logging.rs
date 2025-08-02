@@ -26,7 +26,7 @@ impl CustomFilter {
 
     #[inline]
     fn enabled(&self, meta: &Metadata<'_>) -> bool {
-        meta.level() <= &self.max_level && meta.target().starts_with("voicechat_discord")
+        meta.level() <= &self.max_level
     }
 }
 
@@ -79,7 +79,7 @@ pub fn ensure_init() {
         .append(true)
         .open("voicechat_discord.log")
         .expect("Unable to open log file");
-    let (filter, reload_handle) = reload::Layer::new(CustomFilter::new(Level::WARN));
+    let (filter, reload_handle) = reload::Layer::new(CustomFilter::new(Level::DEBUG));
     if tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_writer(file))

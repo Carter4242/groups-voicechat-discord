@@ -29,7 +29,7 @@ public final class DiscordBot {
             return;
         }
 
-        platform.debug("Attempting to register audio listener for " + platform.getName(player) + " (" + player.getUuid() + ")");
+        platform.info("Attempting to register audio listener for " + platform.getName(player) + " (" + player.getUuid() + ")");
         AudioListener listener = api.playerAudioListenerBuilder()
                 .setPacketListener(packet -> handlePacket(packet, player))
                 .setPlayer(player.getUuid())
@@ -37,15 +37,34 @@ public final class DiscordBot {
         api.registerAudioListener(listener);
         listeners.put(player.getUuid(), listener);
 
-        platform.debug("Attempting to create audio sender for connection: " + connection);
+        platform.info("Attempting to create audio sender for connection: " + connection);
+        if (connection == null) {
+            platform.error("Connection is null when trying to create AudioSender for " + platform.getName(player));
+        } else {
+            platform.info("Connection class: " + connection.getClass().getName() + ", toString: " + connection);
+        }
         AudioSender sender = api.createAudioSender(connection);
-        platform.debug("AudioSender created: " + sender);
+        if (sender == null) {
+            platform.error("AudioSender is null for player " + platform.getName(player) + ", connection: " + connection);
+        } else {
+            platform.debug("AudioSender class: " + sender.getClass().getName() + ", toString: " + sender);
+        }
+        platform.info("AudioSender created: " + sender);
         boolean registered = api.registerAudioSender(sender);
-        platform.debug("registerAudioSender returned: " + registered);
+        platform.info("registerAudioSender called for player: " + platform.getName(player) + ", sender: " + sender + ", result: " + registered);
+        platform.info("registerAudioSender returned: " + registered);
         if (registered) {
             senders.put(player.getUuid(), sender);
         } else {
             platform.error("Couldn't register audio sender for " + platform.getName(player) + ". Connection: " + connection + ", Sender: " + sender);
+            if (connection != null) {
+                platform.error("Connection details: class=" + connection.getClass().getName() + ", toString=" + connection);
+            }
+            if (sender != null) {
+                platform.error("Sender details: class=" + sender.getClass().getName() + ", toString=" + sender);
+            }
+            platform.error("Listeners map: " + listeners);
+            platform.error("Senders map: " + senders);
         }
     }
 

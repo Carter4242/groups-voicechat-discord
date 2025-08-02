@@ -51,7 +51,7 @@ public final class GroupManager {
 
         List<ServerPlayer> players = getPlayers(group);
         if (players.stream().noneMatch(serverPlayer -> serverPlayer.getUuid() == player.getUuid())) {
-            platform.debug(player.getUuid() + " (" + platform.getName(player) + ") joined " + group.getId() + " (" + group.getName() + ")");
+            platform.info(player.getUuid() + " (" + platform.getName(player) + ") joined " + group.getId() + " (" + group.getName() + ")");
             players.add(player);
             // If this is the first group, add player to DiscordBot
             if (firstGroupId != null && firstGroupId.equals(group.getId())) {
@@ -60,7 +60,7 @@ public final class GroupManager {
                 }
             }
         } else {
-            platform.debug(player.getUuid() + " (" + platform.getName(player) + ") already joined " + group.getId() + " (" + group.getName() + ")");
+            platform.info(player.getUuid() + " (" + platform.getName(player) + ") already joined " + group.getId() + " (" + group.getName() + ")");
         }
     }
 
@@ -73,16 +73,16 @@ public final class GroupManager {
                 List<ServerPlayer> playerList = groupEntry.getValue();
                 if (playerList.stream().anyMatch(serverPlayer -> serverPlayer.getUuid() == player.getUuid())) {
                     UUID playerGroup = groupEntry.getKey();
-                    platform.debug(player.getUuid() + " (" + platform.getName(player) + ") left " + playerGroup + " (" + api.getGroup(playerGroup).getName() + ")");
+                    platform.info(player.getUuid() + " (" + platform.getName(player) + ") left " + playerGroup + " (" + api.getGroup(playerGroup).getName() + ")");
                     playerList.remove(player);
                     return;
                 }
             }
-            platform.debug(player.getUuid() + " (" + platform.getName(player) + ") left a group but we couldn't find the group they left");
+            platform.info(player.getUuid() + " (" + platform.getName(player) + ") left a group but we couldn't find the group they left");
             return;
         }
 
-        platform.debug(player.getUuid() + " (" + platform.getName(player) + ") left " + group.getId() + " (" + group.getName() + ")");
+        platform.info(player.getUuid() + " (" + platform.getName(player) + ") left " + group.getId() + " (" + group.getName() + ")");
 
         List<ServerPlayer> players = getPlayers(group);
         players.remove(player);
@@ -124,12 +124,12 @@ public final class GroupManager {
 
         VoicechatConnection connection = event.getConnection();
         if (connection == null) {
-            platform.debug("someone created " + groupId + " (" + group.getName() + ")");
+            platform.info("someone created " + groupId + " (" + group.getName() + ")");
             return;
         }
         ServerPlayer player = connection.getPlayer();
 
-        platform.debug(player.getUuid() + " (" + platform.getName(player) + ") created " + groupId + " (" + group.getName() + ")");
+        platform.info(player.getUuid() + " (" + platform.getName(player) + ") created " + groupId + " (" + group.getName() + ")");
 
         List<ServerPlayer> players = getPlayers(group);
         players.add(player);
@@ -140,7 +140,7 @@ public final class GroupManager {
         Group group = event.getGroup();
         UUID groupId = group.getId();
 
-        platform.debug(groupId + " (" + groupFriendlyIds.get(groupId) + ", " + group.getName() + ")" + " was removed");
+        platform.info(groupId + " (" + groupFriendlyIds.get(groupId) + ", " + group.getName() + ")" + " was removed");
 
         if (firstGroupId != null && firstGroupId.equals(groupId)) {
             platform.info("First group removed: " + group.getName() + " (" + groupId + ")");
