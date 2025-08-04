@@ -77,12 +77,12 @@ pub fn ensure_init() {
     let file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("voicechat_discord.log")
+        .open("v_dis.log")
         .expect("Unable to open log file");
     let (filter, reload_handle) = reload::Layer::new(CustomFilter::new(Level::DEBUG));
     if tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer().with_writer(file))
+        .with(fmt::layer().with_writer(file).with_ansi(false))
         .try_init()
         .is_err()
     {
