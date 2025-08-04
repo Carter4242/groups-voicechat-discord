@@ -49,6 +49,17 @@ impl super::DiscordBot {
                     .wrap_err("Unable to join call")?;
                 let mut call = call_lock.lock().await;
 
+                // Check connection state
+                if let Some(conn) = call.current_connection() {
+                    if !conn.connected { // Songbird connection struct has a 'connected' field
+                        tracing::warn!("Songbird call is not connected after join; audio bridging will not work");
+                    } else {
+                        tracing::info!("Songbird call is connected and streaming");
+                    }
+                } else {
+                    tracing::warn!("Songbird call has no active connection after join; audio bridging will not work");
+                }
+
                 call.add_global_event(
                     CoreEvent::VoiceTick.into(),
                     VoiceHandler {

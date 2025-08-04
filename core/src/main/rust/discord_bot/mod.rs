@@ -6,7 +6,7 @@ use std::{
 
 use dashmap::DashMap;
 use uuid::Uuid;
-use eyre::{Context as _, Report};
+use eyre::{Report};
 use parking_lot::{Mutex, RwLock};
 use serenity::all::{ChannelId, GuildId, Http};
 use songbird::{
@@ -56,6 +56,14 @@ enum State {
 }
 
 impl DiscordBot {
+    /// Returns true if bot is in Started state
+    pub fn is_audio_active(&self) -> bool {
+        if let Some(lock) = self.state.try_read() {
+            matches!(*lock, State::Started { .. })
+        } else {
+            false
+        }
+    }
     pub fn new(token: String, vc_id: ChannelId) -> DiscordBot {
         let (received_audio_tx, received_audio_rx) = flume::bounded(MAX_AUDIO_BUFFER);
         DiscordBot {

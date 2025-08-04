@@ -51,11 +51,15 @@ impl EventHandler for VoiceHandler {
 
             let payload = payload[start..].to_vec();
 
-            // Call decode_and_route_to_groups on the DiscordBot instance
+            // Only route audio if bot is in Started state
+            if !self.bot.is_audio_active() {
+                warn!("DiscordBot is not in Started state; audio bridging is disabled");
+                return None;
+            }
             self.bot.decode_and_route_to_groups(&payload);
 
             if self.received_audio_tx.send(payload).is_err() {
-                warn!("received_audio rx dropped");
+                warn!("received_audio rx dropped; bot may have been stopped or freed");
             }
         }
         None
