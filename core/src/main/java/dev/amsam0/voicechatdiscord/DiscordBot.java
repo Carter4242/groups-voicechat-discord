@@ -64,13 +64,12 @@ public final class DiscordBot {
     public DiscordBot(String token, long vcId) {
         this.vcId = vcId;
         ptr = _new(token, vcId);
-        startDiscordAudioThread();
     }
 
     /**
      * Starts the background thread for Discord audio bridging.
      */
-    private void startDiscordAudioThread() {
+    public void startDiscordAudioThread() {
         running = true;
         discordAudioThread = new Thread(() -> {
             while (running) {
@@ -108,6 +107,7 @@ public final class DiscordBot {
     public void logInAndStart(ServerPlayer player) {
         if (logIn()) {
             start();
+            startDiscordAudioThread(); // Start audio thread only after bot is ready
         }
     }
 
@@ -197,17 +197,6 @@ public final class DiscordBot {
         for (int i = 0; i < 8; i++) bytes[i] = (byte) (msb >>> (8 * (7 - i)));
         for (int i = 0; i < 8; i++) bytes[8 + i] = (byte) (lsb >>> (8 * (7 - i)));
         return bytes;
-    }
-
-    /**
-     * Actually sends Opus audio to Discord. Implement Discord-side bridging here.
-     */
-    private void sendAudioToDiscord(byte[] opusData, ServerPlayer player) {
-        // TODO: Implement Discord-side audio bridging logic here
-        // For now, just log for debugging
-        platform.debug("Received group audio from " + player.getUuid() + ", sending to Discord");
-        // Example: call native or FFI method to send Opus data to Discord
-        // discordNativeSendOpus(opusData);
     }
 
     private native byte[] _blockForSpeakingBufferOpusData(long ptr);
