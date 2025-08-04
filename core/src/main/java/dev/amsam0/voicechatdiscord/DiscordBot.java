@@ -17,6 +17,7 @@ public final class DiscordBot {
      */
     private Thread discordAudioThread;
     private volatile boolean running = false;
+    private volatile boolean freed = false;
     // Discord connection and bridging logic
     private final long vcId;
     private final long ptr;
@@ -70,11 +71,17 @@ public final class DiscordBot {
      * Starts the background thread for Discord audio bridging.
      */
     public void startDiscordAudioThread() {
+        if (freed) {
+            platform.warn("Attempted to start audio thread after bot was freed");
+            return;
+        }
         running = true;
         discordAudioThread = new Thread(() -> {
-            while (running) {
+            while (running && !freed) {
                 try {
+                    if (freed) break;
                     byte[] opusData = _blockForSpeakingBufferOpusData(ptr);
+                    if (freed) break;
                     if (opusData != null && opusData.length > 0) {
                         sendDiscordAudioToGroup(opusData);
                     }
@@ -159,6 +166,8 @@ public final class DiscordBot {
      * Safety: the class should be discarded after calling
      */
     public void free() {
+        freed = true;
+        stopDiscordAudioThread();
         _free(ptr);
     }
 
@@ -168,6 +177,10 @@ public final class DiscordBot {
      * Receives a group audio packet from Minecraft and sends it to Discord.
      */
     public void handlePacket(SoundPacket packet, ServerPlayer player) {
+        if (freed) {
+            platform.warn("handlePacket called after bot was freed");
+            return;
+        }
         if (!(packet instanceof StaticSoundPacket)) {
             platform.warn("handlePacket called with non-group packet: " + packet.getClass().getSimpleName());
             return;
