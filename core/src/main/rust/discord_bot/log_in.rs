@@ -19,7 +19,7 @@ use super::State;
 
 impl super::DiscordBot {
     #[tracing::instrument(skip(self), fields(self.vc_id = %self.vc_id))]
-    pub fn log_in(&mut self) -> Result<(), Report> {
+    pub fn log_in(&self) -> Result<(), Report> {
         let mut state_lock = self.state.write();
 
         if !matches!(*state_lock, State::NotLoggedIn) {

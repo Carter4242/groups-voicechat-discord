@@ -7,6 +7,7 @@ use serenity::all::ChannelId;
 use std::sync::Arc;
 use tracing::info;
 
+use crate::discord_bot::State;
 use crate::ResultExt;
 
 use super::DiscordBot;
@@ -23,7 +24,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1new<'local>
         .expect("Couldn't get java string! Please file a GitHub issue")
         .into();
 
-    let discord_bot = Arc::new(std::sync::Mutex::new(DiscordBot::new(token, ChannelId::new(vc_id as u64))));
+    let discord_bot = Arc::new(DiscordBot::new(token, ChannelId::new(vc_id as u64)));
     Arc::into_raw(discord_bot) as jlong
 }
 
@@ -33,10 +34,13 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1isStarted(
     _obj: jobject,
     ptr: jlong,
 ) -> jboolean {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<DiscordBot>) };
-    let result = match discord_bot.try_lock() {
-        Ok(guard) => guard.is_started() as jboolean,
-        Err(_) => 0 as jboolean, // false if lock is unavailable
+    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+    let result = {
+        if let Some(lock) = discord_bot.state.try_read() {
+            matches!(*lock, State::Started { .. }) as jboolean
+        } else {
+            0 as jboolean
+        }
     };
     let _ = Arc::into_raw(discord_bot);
     result
@@ -48,8 +52,8 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1logIn(
     _obj: jobject,
     ptr: jlong,
 ) {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<DiscordBot>) };
-    discord_bot.lock().unwrap().log_in().discard_or_throw(&mut env);
+    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+    discord_bot.log_in().discard_or_throw(&mut env);
     let _ = Arc::into_raw(discord_bot);
 }
 
@@ -69,7 +73,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1start(
     }
 
     // SAFETY: We temporarily wrap the pointer in an Arc, call start, then restore the raw pointer
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<DiscordBot>) };
+    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
     tracing::info!("Arc::from_raw succeeded, calling DiscordBot::start");
 
     let value_on_throw = env
@@ -94,8 +98,8 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1stop(
     _obj: jobject,
     ptr: jlong,
 ) {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<DiscordBot>) };
-    discord_bot.lock().unwrap().stop().discard_or_throw(&mut env);
+    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+    discord_bot.stop().discard_or_throw(&mut env);
     let _ = Arc::into_raw(discord_bot);
 }
 
@@ -105,7 +109,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1free(
     _obj: jobject,
     ptr: jlong,
 ) {
-    let _ = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<DiscordBot>) };
+    let _ = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
 }
 
 #[no_mangle]
@@ -116,7 +120,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
     group_id_bytes: JByteArray<'local>,
     raw_opus_data: JByteArray<'local>,
 ) {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<DiscordBot>) };
+    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
 
     let group_id = {
         let bytes = env.convert_byte_array(group_id_bytes).expect("Unable to convert group_id bytes");
@@ -125,7 +129,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
 
     let raw_opus_data = env.convert_byte_array(raw_opus_data).expect("Unable to convert byte array");
 
-    discord_bot.lock().unwrap().add_audio_to_group_buffer(group_id, &raw_opus_data);
+    discord_bot.add_audio_to_group_buffer(group_id, &raw_opus_data);
 
     let _ = Arc::into_raw(discord_bot);
 }
@@ -136,21 +140,18 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
     _obj: jobject,
     ptr: jlong,
 ) -> JByteArray<'_> {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<DiscordBot>) };
+    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
 
-    let opus_data = {
-        let guard = discord_bot.lock().unwrap();
-        match guard.block_for_speaking_opus_data() {
-            Ok(d) => d,
-            Err(e) => {
-                info!(
-                    "Failed to get speaking opus data for bot with vc_id {}: {e:#}",
-                    guard.vc_id
-                );
-                return env
-                    .byte_array_from_slice(&[])
-                    .expect("Couldn't create byte array from slice. Please file a GitHub issue");
-            }
+    let opus_data = match discord_bot.block_for_speaking_opus_data() {
+        Ok(d) => d,
+        Err(e) => {
+            info!(
+                "Failed to get speaking opus data for bot with vc_id {}: {e:#}",
+                discord_bot.vc_id
+            );
+            return env
+                .byte_array_from_slice(&[])
+                .expect("Couldn't create byte array from slice. Please file a GitHub issue");
         }
     };
 

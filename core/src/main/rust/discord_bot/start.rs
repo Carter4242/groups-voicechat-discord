@@ -12,10 +12,9 @@ use super::State;
 
 impl super::DiscordBot {
     /// Returns the voice channel name
-    #[tracing::instrument(skip(bot), fields(bot_vc_id = %bot.lock().unwrap().vc_id))]
-    pub fn start(bot: Arc<std::sync::Mutex<super::DiscordBot>>) -> Result<String, Report> {
-        let bot_guard = bot.lock().unwrap();
-        let mut state_lock = bot_guard.state.write();
+    #[tracing::instrument(skip(bot), fields(bot_vc_id = %bot.vc_id))]
+    pub fn start(bot: Arc<super::DiscordBot>) -> Result<String, Report> {
+        let mut state_lock = bot.state.write();
 
         let State::LoggedIn { http } = &*state_lock else {
             if matches!(*state_lock, State::Started { .. }) {
@@ -26,21 +25,21 @@ impl super::DiscordBot {
         };
 
         // In case there are any packets left over
-        bot_guard.received_audio_rx.drain();
+        bot.received_audio_rx.drain();
 
         let channel = match RUNTIME
-            .block_on(http.get_channel(bot_guard.vc_id))
+            .block_on(http.get_channel(bot.vc_id))
             .wrap_err("Couldn't get voice channel")?
         {
             Channel::Guild(c) if c.kind == ChannelType::Voice => c,
             _ => return Err(eyre!("The specified channel is not a voice channel.")),
         };
 
-        let songbird = bot_guard.songbird.clone();
-        let vc_id = bot_guard.vc_id;
+        let songbird = bot.songbird.clone();
+        let vc_id = bot.vc_id;
         let guild_id = channel.guild_id;
-        let received_audio_tx = bot_guard.received_audio_tx.clone();
-        let group_buffers = Arc::clone(&bot_guard.group_buffers);
+        let received_audio_tx = bot.received_audio_tx.clone();
+        let group_buffers = Arc::clone(&bot.group_buffers);
         let bot_for_async = Arc::clone(&bot);
         {
             if let Err(e) = RUNTIME.block_on(async move {
@@ -64,7 +63,7 @@ impl super::DiscordBot {
 
                 eyre::Ok(())
             }) {
-                bot_guard.disconnect(guild_id);
+                bot.disconnect(guild_id);
                 return Err(e);
             }
         }

@@ -81,6 +81,7 @@ impl DiscordBot {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_started(&self) -> bool {
         if let Some(lock) = self.state.try_read() {
             matches!(*lock, State::Started { .. })
@@ -111,7 +112,7 @@ impl DiscordBot {
     }
 
     #[tracing::instrument(skip(self), fields(self.vc_id = %self.vc_id))]
-    pub fn stop(&mut self) -> Result<(), Report> {
+    pub fn stop(&self) -> Result<(), Report> {
         let mut state_lock = self.state.write();
         let State::Started { http, guild_id } = &*state_lock else {
             info!("Bot is not started");
