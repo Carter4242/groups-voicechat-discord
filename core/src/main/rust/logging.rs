@@ -79,7 +79,7 @@ pub fn ensure_init() {
         .append(true)
         .open("v_dis.log")
         .expect("Unable to open log file");
-    let (filter, reload_handle) = reload::Layer::new(CustomFilter::new(Level::DEBUG));
+    let (filter, reload_handle) = reload::Layer::new(CustomFilter::new(Level::INFO));
     if tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_writer(file).with_ansi(false))
