@@ -34,7 +34,10 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1isStarted(
     ptr: jlong,
 ) -> jboolean {
     let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<DiscordBot>) };
-    let result = discord_bot.lock().unwrap().is_started() as jboolean;
+    let result = match discord_bot.try_lock() {
+        Ok(guard) => guard.is_started() as jboolean,
+        Err(_) => 0 as jboolean, // false if lock is unavailable
+    };
     let _ = Arc::into_raw(discord_bot);
     result
 }
