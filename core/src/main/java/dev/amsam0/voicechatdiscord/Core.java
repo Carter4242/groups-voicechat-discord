@@ -1,21 +1,16 @@
 package dev.amsam0.voicechatdiscord;
 
-import com.github.zafarkhaja.semver.ParseException;
-import com.github.zafarkhaja.semver.Version;
 import de.maxhenkel.voicechat.api.VoicechatServerApi;
 import org.bspfsystems.yamlconfiguration.configuration.InvalidConfigurationException;
 import org.bspfsystems.yamlconfiguration.file.YamlConfiguration;
-import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.UUID;
 
 import static dev.amsam0.voicechatdiscord.Constants.CONFIG_HEADER;
-import static dev.amsam0.voicechatdiscord.Constants.VOICECHAT_MIN_VERSION;
 
 /**
  * Core code between Paper.
@@ -35,8 +30,6 @@ public final class Core {
 
     public static void enable() {
         // This should happen first
-        checkSimpleVoiceChatVersion(platform.getSimpleVoiceChatVersion());
-
         try {
             LibraryLoader.load("voicechat_discord");
             initializeNatives();
@@ -46,8 +39,6 @@ public final class Core {
         }
 
         loadConfig();
-
-        platform.setOnPlayerLeaveHandler(Core::onPlayerLeave);
     }
 
     public static void disable() {
@@ -87,8 +78,6 @@ public final class Core {
         defaultBot.put("token", "DISCORD_BOT_TOKEN_HERE");
         defaultBot.put("vc_id", "VOICE_CHANNEL_ID_HERE");
         config.addDefault("bots", List.of(defaultBot));
-
-        config.addDefault("alert_ops_of_updates", true);
 
         config.addDefault("debug_level", 0);
 
@@ -142,60 +131,5 @@ public final class Core {
         bots.clear();
     }
 
-    private static void onPlayerLeave(UUID playerUuid) {
-        DiscordBot bot = getBotForPlayer(playerUuid);
-        if (bot != null) {
-            platform.info("Stopping bot for player " + playerUuid);
-            bot.stop();
-        }
-    }
-
-    public static @Nullable DiscordBot getBotForPlayer(UUID playerUuid) {
-        return getBotForPlayer(playerUuid, false);
-    }
-
-    public static @Nullable DiscordBot getBotForPlayer(UUID playerUuid, boolean fallbackToAvailableBot) {
-        for (DiscordBot bot : bots) {
-            if (bot.player() != null && bot.player().getUuid() == playerUuid)
-                return bot;
-        }
-        if (fallbackToAvailableBot)
-            return getAvailableBot();
-        return null;
-    }
-
-    private static @Nullable DiscordBot getAvailableBot() {
-        for (DiscordBot bot : bots) {
-            if (bot.player() == null)
-                return bot;
-        }
-        return null;
-    }
-
-    private static void checkSimpleVoiceChatVersion(@Nullable String version) {
-        if (version != null) {
-            platform.debug("SVC version: " + version);
-            String[] splitVersion = version.split("-");
-            if (splitVersion.length > 1) {
-                // Beta builds are fine since they will have the new APIs we depend on.
-                // If we don't remove the ending part, it will say SVC isn't new enough
-                version = splitVersion[0];
-                platform.debug("SVC version after normalizing: " + version);
-            }
-        }
-
-        try {
-            if (version == null || Version.parse(version).isLowerThan(Version.parse(VOICECHAT_MIN_VERSION))) {
-                String message = "Simple Voice Chat Discord Bridge requires Simple Voice Chat version " + VOICECHAT_MIN_VERSION + " or later.";
-                if (version != null) {
-                    message += " You have version " + version + ".";
-                }
-                platform.error(message);
-                throw new RuntimeException(message);
-            }
-        } catch (IllegalArgumentException | ParseException e) {
-            platform.error("Failed to parse SVC version", e);
-            platform.warn("Assuming SVC is " + VOICECHAT_MIN_VERSION + " or later. If not, things will break.");
-        }
-    }
+    // Removed obsolete per-player bot management and player leave handler
 }

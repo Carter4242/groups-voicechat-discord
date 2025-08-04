@@ -1,25 +1,24 @@
 use std::{
-    ops::Deref,
     sync::Arc,
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use dashmap::DashMap;
-use eyre::{eyre, Context as _, Report};
+use uuid::Uuid;
+use eyre::{Context as _, Report};
 use parking_lot::{Mutex, RwLock};
 use serenity::all::{ChannelId, GuildId, Http};
 use songbird::{
     driver::{
-        opus::coder::{Decoder, GenericCtl},
         DecodeMode,
     },
     Config, Songbird,
 };
 use tokio::task::AbortHandle;
-use tracing::{debug, info, trace, warn};
+use tracing::{info, warn};
 
-use crate::audio_util::{RawAudio, MAX_AUDIO_BUFFER, OPUS_SAMPLE_RATE, OPUS_CHANNELS};
+use crate::audio_util::MAX_AUDIO_BUFFER;
 use crate::runtime::RUNTIME;
 
 mod discord_receive;
@@ -27,15 +26,10 @@ mod discord_speak;
 mod jni;
 mod log_in;
 mod start;
-mod svc_receive;
 
-type SenderId = i32;
-
-struct Sender {
-    audio_buffer_tx: flume::Sender<RawAudio>,
-    audio_buffer_rx: flume::Receiver<RawAudio>,
-    decoder: Mutex<Decoder>,
-    last_audio_received: Mutex<Option<Instant>>,
+struct GroupAudioBuffer {
+    buffer_tx: flume::Sender<Vec<u8>>,
+    buffer_rx: flume::Receiver<Vec<u8>>,
 }
 
 struct DiscordBot {
@@ -46,6 +40,7 @@ struct DiscordBot {
     received_audio_tx: flume::Sender<Vec<u8>>,
     received_audio_rx: flume::Receiver<Vec<u8>>,
     client_task: Mutex<Option<AbortHandle>>,
+    group_buffers: Arc<DashMap<Uuid, GroupAudioBuffer>>,
 }
 
 enum State {
@@ -57,7 +52,6 @@ enum State {
     Started {
         http: Arc<Http>,
         guild_id: GuildId,
-        senders: Arc<DashMap<i32, Sender>>,
     },
 }
 
@@ -75,6 +69,15 @@ impl DiscordBot {
             received_audio_tx,
             received_audio_rx,
             client_task: Mutex::new(None),
+            group_buffers: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Route Discord Opus payload to all group buffers
+    pub fn decode_and_route_to_groups(&self, payload: &[u8]) {
+        for entry in self.group_buffers.iter() {
+            let group_id = *entry.key();
+            self.add_audio_to_group_buffer(group_id, payload);
         }
     }
 
@@ -82,8 +85,6 @@ impl DiscordBot {
         if let Some(lock) = self.state.try_read() {
             matches!(*lock, State::Started { .. })
         } else {
-            // if the write lock is being held, the bot is currently
-            // logging in, starting, or stopping, so it's not started
             false
         }
     }
@@ -99,7 +100,6 @@ impl DiscordBot {
                 info!("Successfully disconnected from call");
                 break;
             }
-
             if tries < 5 {
                 info!("Trying to disconnect again in 500 milliseconds");
                 thread::sleep(Duration::from_millis(500));
@@ -113,127 +113,36 @@ impl DiscordBot {
     #[tracing::instrument(skip(self), fields(self.vc_id = %self.vc_id))]
     pub fn stop(&mut self) -> Result<(), Report> {
         let mut state_lock = self.state.write();
-
-        let State::Started { http, guild_id, .. } = &*state_lock else {
+        let State::Started { http, guild_id } = &*state_lock else {
             info!("Bot is not started");
             return Ok(());
         };
-
         self.disconnect(*guild_id);
-
-        // senders will be dropped here and the decoders will free themselves (thanks Rust)
         *state_lock = State::LoggedIn { http: http.clone() };
-
         Ok(())
     }
 
     pub fn block_for_speaking_opus_data(&self) -> Result<Vec<u8>, Report> {
-        // If we don't have a timeout, the sender thread will continue to block when the bot stops
         self.received_audio_rx
             .recv_timeout(Duration::from_secs(1))
             .wrap_err("failed to recv receive_audio")
     }
 
-    #[tracing::instrument(skip(self), fields(self.vc_id = %self.vc_id))]
-    pub fn reset_senders(&self) -> Result<(), Report> {
-        /// Make sure to mirror this value on the Java side (`DiscordBot.MILLISECONDS_UNTIL_RESET`)
-        const DURATION_UNTIL_RESET: Duration = Duration::from_millis(1000);
-
-        trace!("Getting state read lock");
-
-        let State::Started { senders, .. } = &*self.state.read() else {
-            return Err(eyre!("Bot is not started"));
-        };
-
-        debug!("Resetting senders");
-
-        let now = Instant::now();
-        for sender in senders.deref() {
-            let sender = sender.value();
-            let mut lock = sender.last_audio_received.lock();
-            if let Some(time) = *lock {
-                if time.duration_since(now) > DURATION_UNTIL_RESET {
-                    *lock = None;
-                    drop(lock); // drop it before reset in case reset takes a while
-                    if let Err(error) = sender.decoder.lock().reset_state() {
-                        // realistically this shouldn't ever happen but if
-                        // it does we don't want to skip other resets so
-                        // just debug log the error
-                        info!(?error, "error when resetting decoder: {error}");
-                    }
+    /// Decode Opus payload and send PCM to the group buffer
+    pub fn add_audio_to_group_buffer(&self, group_id: Uuid, payload: &[u8]) {
+        let buffer = self.group_buffers.entry(group_id)
+            .or_insert_with(|| {
+                let (tx, rx) = flume::bounded(MAX_AUDIO_BUFFER);
+                GroupAudioBuffer {
+                    buffer_tx: tx,
+                    buffer_rx: rx,
                 }
-            }
-        }
-
-        debug!("Reset senders");
-
-        Ok(())
-    }
-
-    pub fn add_player_to_group(&mut self, sender_id: i32) {
-        if let Some(mut state) = self.state.try_write() {
-            if let State::Started { senders, .. } = &mut *state {
-                if !senders.contains_key(&sender_id) {
-                    let (audio_buffer_tx, audio_buffer_rx) = flume::bounded(MAX_AUDIO_BUFFER);
-                    senders.insert(
-                        sender_id,
-                        Sender {
-                            audio_buffer_tx,
-                            audio_buffer_rx,
-                            decoder: Mutex::new(
-                                songbird::driver::opus::coder::Decoder::new(OPUS_SAMPLE_RATE, OPUS_CHANNELS)
-                                    .expect("Unable to make opus decoder"),
-                            ),
-                            last_audio_received: Mutex::new(None),
-                        },
-                    );
-                    debug!("Added sender {} to group", sender_id);
-                }
-            }
-        }
-    }
-
-    pub fn remove_player_from_group(&mut self, sender_id: i32) {
-        if let Some(mut state) = self.state.try_write() {
-            if let State::Started { senders, .. } = &mut *state {
-                if senders.remove(&sender_id).is_some() {
-                    debug!("Removed sender {} from group", sender_id);
-                }
-            }
-        }
-    }
-
-    /// Decode Opus payload once and send PCM to all group members
-    pub fn decode_and_route_to_groups(&self, payload: &[u8]) {
-        let State::Started { senders, .. } = &*self.state.read() else {
-            warn!("Bot is not started, cannot decode");
+            });
+        if buffer.buffer_tx.is_full() {
+            warn!("Group audio buffer is full for group_id={:?}", group_id);
             return;
-        };
-        for sender in senders.iter() {
-            if sender.value().audio_buffer_tx.is_full() {
-                warn!("Sender audio buffer is full");
-                continue;
-            }
-            let mut audio = vec![0i16; 960];
-            let decode_result = sender.value().decoder.lock().decode(
-                Some(payload.try_into().wrap_err("Invalid opus data").unwrap()),
-                (&mut audio).try_into().wrap_err("Unable to wrap output").unwrap(),
-                false,
-            );
-            match decode_result {
-                Ok(_) => {
-                    let len = audio.len();
-                    let raw_audio: [i16; 960] = audio.try_into().unwrap_or_else(|_| {
-                        warn!("Decoded audio is of length {len} when it should be 960");
-                        [0i16; 960]
-                    });
-                    let _ = sender.value().audio_buffer_tx.send(raw_audio);
-                }
-                Err(e) => {
-                    warn!("Unable to decode raw opus data: {e}");
-                }
-            }
         }
+        let _ = buffer.buffer_tx.send(payload.to_vec());
     }
 }
 

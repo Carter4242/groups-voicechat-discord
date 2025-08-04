@@ -8,9 +8,7 @@ import de.maxhenkel.voicechat.api.events.JoinGroupEvent;
 import de.maxhenkel.voicechat.api.events.LeaveGroupEvent;
 import de.maxhenkel.voicechat.api.events.RemoveGroupEvent;
 import dev.amsam0.voicechatdiscord.util.BiMap;
-import org.jetbrains.annotations.Nullable;
 
-import java.lang.reflect.Field;
 import java.util.*;
 
 import static dev.amsam0.voicechatdiscord.Core.api;
@@ -23,20 +21,8 @@ public final class GroupManager {
     // Tracks the first group created on the server
     public static UUID firstGroupId = null;
 
-    public static @Nullable String getPassword(Group group) {
-        // https://github.com/henkelmax/enhanced-groups/blob/f5535f84fc41a2b1798b2b43adddcd6b6b28c22a/src/main/java/de/maxhenkel/enhancedgroups/events/ForceGroupTypeEvents.java#LL46C53-L57C10
-        try {
-            Field groupField = group.getClass().getDeclaredField("group"); // https://github.com/henkelmax/simple-voice-chat/blob/6bdc2901f28b8bc7fc492871b644a2d5478e54dd/common/src/main/java/de/maxhenkel/voicechat/plugins/impl/GroupImpl.java#L13
-            groupField.setAccessible(true);
-            Object groupObject = groupField.get(group);
-            Field passwordField = groupObject.getClass().getDeclaredField("password"); // https://github.com/henkelmax/simple-voice-chat/blob/6bdc2901f28b8bc7fc492871b644a2d5478e54dd/common/src/main/java/de/maxhenkel/voicechat/voice/server/Group.java#L13
-            passwordField.setAccessible(true);
-            return (String) passwordField.get(groupObject);
-        } catch (Throwable e) {
-            platform.error("Could not get password of group \"" + group.getName() + "\" (" + group.getId() + "): ", e);
-            return null;
-        }
-    }
+    // Map: groupId -> (player UUID -> StaticAudioChannel)
+    public static final Map<UUID, Map<UUID, de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>> groupAudioChannels = new HashMap<>();
 
     private static List<ServerPlayer> getPlayers(Group group) {
         List<ServerPlayer> players = groupPlayers.putIfAbsent(group.getId(), new ArrayList<>());
@@ -53,10 +39,18 @@ public final class GroupManager {
         if (players.stream().noneMatch(serverPlayer -> serverPlayer.getUuid() == player.getUuid())) {
             platform.info(player.getUuid() + " (" + platform.getName(player) + ") joined " + group.getId() + " (" + group.getName() + ")");
             players.add(player);
-            // If this is the first group, add player to DiscordBot
+            // If this is the first group, create StaticAudioChannel for this player
             if (firstGroupId != null && firstGroupId.equals(group.getId())) {
-                if (!Core.bots.isEmpty()) {
-                    Core.bots.get(0).addPlayerToGroup(player);
+                // Create StaticAudioChannel for this player
+                var connection = event.getConnection();
+                var level = player.getServerLevel();
+                var channelId = group.getId();
+                var staticChannel = api.createStaticAudioChannel(channelId, level, connection);
+                if (staticChannel != null) {
+                    groupAudioChannels.computeIfAbsent(channelId, k -> new HashMap<>()).put(player.getUuid(), staticChannel);
+                    platform.info("Created StaticAudioChannel for player " + player.getUuid() + " in group " + channelId);
+                } else {
+                    platform.error("Failed to create StaticAudioChannel for player " + player.getUuid() + " in group " + channelId);
                 }
             }
         } else {
@@ -75,6 +69,12 @@ public final class GroupManager {
                     UUID playerGroup = groupEntry.getKey();
                     platform.info(player.getUuid() + " (" + platform.getName(player) + ") left " + playerGroup + " (" + api.getGroup(playerGroup).getName() + ")");
                     playerList.remove(player);
+                    // Remove StaticAudioChannel for this player if present
+                    Map<UUID, de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel> channels = groupAudioChannels.get(playerGroup);
+                    if (channels != null) {
+                        var removed = channels.remove(player.getUuid());
+                        if (removed != null) platform.info("Removed StaticAudioChannel for player " + player.getUuid() + " in group " + playerGroup);
+                    }
                     return;
                 }
             }
@@ -88,8 +88,11 @@ public final class GroupManager {
         players.remove(player);
         // If this is the first group, remove player from DiscordBot
         if (firstGroupId != null && firstGroupId.equals(group.getId())) {
-            if (!Core.bots.isEmpty()) {
-                Core.bots.get(0).removePlayerFromGroup(player);
+            // Remove StaticAudioChannel for this player if present
+            Map<UUID, de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel> channels = groupAudioChannels.get(group.getId());
+            if (channels != null) {
+                var removed = channels.remove(player.getUuid());
+                if (removed != null) platform.info("Removed StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId());
             }
         }
     }
@@ -102,11 +105,9 @@ public final class GroupManager {
         if (firstGroupId == null) {
             firstGroupId = groupId;
             platform.info("First group created: " + group.getName() + " (" + groupId + ")");
-            // Automatically start Discord bot for the first group
-            // Find an available bot and start it for the group
-            DiscordBot bot = Core.getBotForPlayer(null, true); // null means no player, fallback to available bot
-            if (bot != null && !bot.isStarted()) {
-                new Thread(() -> bot.logInAndStart(null), "voicechat-discord: Bot AutoStart for First Group").start();
+            // Start Discord bot for the first group
+            if (!Core.bots.isEmpty() && !Core.bots.get(0).isStarted()) {
+                new Thread(() -> Core.bots.get(0).logInAndStart(null), "voicechat-discord: Bot AutoStart for First Group").start();
                 platform.info("Auto-started Discord bot for first group: " + group.getName());
             } else {
                 platform.warn("No available Discord bot to auto-start for first group.");
@@ -145,6 +146,13 @@ public final class GroupManager {
         if (firstGroupId != null && firstGroupId.equals(groupId)) {
             platform.info("First group removed: " + group.getName() + " (" + groupId + ")");
             firstGroupId = null;
+            // Stop Discord bot for the first group
+            if (!Core.bots.isEmpty() && Core.bots.get(0).isStarted()) {
+                Core.bots.get(0).stop();
+                platform.info("Stopped Discord bot for first group: " + group.getName());
+            }
+            // Remove all StaticAudioChannels for this group
+            groupAudioChannels.remove(groupId);
         }
 
         groupPlayers.remove(groupId);

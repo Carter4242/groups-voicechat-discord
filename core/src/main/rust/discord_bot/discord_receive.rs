@@ -52,7 +52,8 @@ impl EventHandler for VoiceHandler {
             let payload = payload[start..].to_vec();
 
             // Call decode_and_route_to_groups on the DiscordBot instance
-            self.bot.lock().unwrap().decode_and_route_to_groups(&payload);
+            let bot = self.bot.lock().unwrap();
+            bot.decode_and_route_to_groups(&payload);
 
             if self.received_audio_tx.send(payload).is_err() {
                 warn!("received_audio rx dropped");

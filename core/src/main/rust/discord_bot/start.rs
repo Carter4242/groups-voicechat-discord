@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use dashmap::DashMap;
 use eyre::{eyre, Context as _, Report};
 use serenity::all::{Channel, ChannelType};
 use songbird::CoreEvent;
@@ -41,10 +40,9 @@ impl super::DiscordBot {
         let vc_id = bot_guard.vc_id;
         let guild_id = channel.guild_id;
         let received_audio_tx = bot_guard.received_audio_tx.clone();
-        let senders = Arc::new(DashMap::new());
+        let group_buffers = Arc::clone(&bot_guard.group_buffers);
         let bot_for_async = Arc::clone(&bot);
         {
-            let senders = senders.clone();
             if let Err(e) = RUNTIME.block_on(async move {
                 let call_lock = songbird
                     .join(guild_id, vc_id)
@@ -61,7 +59,7 @@ impl super::DiscordBot {
                     },
                 );
 
-                call.play_only_input(create_playable_input(senders)?);
+                call.play_only_input(create_playable_input(group_buffers)?);
                 // TODO: track error handling
 
                 eyre::Ok(())
@@ -74,7 +72,6 @@ impl super::DiscordBot {
         *state_lock = State::Started {
             http: http.clone(),
             guild_id,
-            senders,
         };
 
         Ok(channel.name)

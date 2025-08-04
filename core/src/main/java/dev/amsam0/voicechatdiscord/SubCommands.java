@@ -44,15 +44,6 @@ public final class SubCommands {
         platform.sendMessage(sender, Component.yellow("Stopping bots..."));
 
         new Thread(() -> {
-            for (DiscordBot bot : bots)
-                if (bot.player() != null)
-                    platform.sendMessage(
-                            bot.player(),
-                            Component.red("The config is being reloaded which stops all bots. Please use "),
-                            Component.white("/dvc start"),
-                            Component.red(" to restart your session.")
-                    );
-
             clearBots();
 
             platform.sendMessage(

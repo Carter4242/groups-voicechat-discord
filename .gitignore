@@ -7,3 +7,4 @@ run/
 config.yml
 core/bin/*
 paper/bin/*
+.vscode

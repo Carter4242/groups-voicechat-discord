@@ -1,6 +1,6 @@
 use jni::{
     objects::{JByteArray, JClass, JString},
-    sys::{jboolean, jdouble, jint, jlong, jobject, JNI_TRUE},
+    sys::{jboolean, jlong, jobject},
     JNIEnv,
 };
 use serenity::all::ChannelId;
@@ -106,36 +106,24 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1free(
 }
 
 #[no_mangle]
-pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToHearingBuffer<
-    'local,
->(
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToHearingBuffer<'local>(
     env: JNIEnv<'local>,
     _obj: jobject,
     ptr: jlong,
-    sender_id: jint,
+    group_id_bytes: JByteArray<'local>,
     raw_opus_data: JByteArray<'local>,
-    adjust_based_on_distance: jboolean,
-    distance: jdouble,
-    max_distance: jdouble,
 ) {
     let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<DiscordBot>) };
 
-    let raw_opus_data = env
-        .convert_byte_array(raw_opus_data)
-        .expect("Unable to convert byte array. Please file a GitHub issue");
+    let group_id = {
+        let bytes = env.convert_byte_array(group_id_bytes).expect("Unable to convert group_id bytes");
+        uuid::Uuid::from_slice(&bytes).expect("Invalid group_id bytes")
+    };
 
-    if let Err(e) = discord_bot.lock().unwrap().add_audio_to_hearing_buffer(
-        sender_id,
-        raw_opus_data,
-        adjust_based_on_distance == JNI_TRUE,
-        distance,
-        max_distance,
-    ) {
-        info!(
-            "Error when adding audio for bot with vc_id {}: {e:#}",
-            discord_bot.lock().unwrap().vc_id
-        );
-    }
+    let raw_opus_data = env.convert_byte_array(raw_opus_data).expect("Unable to convert byte array");
+
+    discord_bot.lock().unwrap().add_audio_to_group_buffer(group_id, &raw_opus_data);
+
     let _ = Arc::into_raw(discord_bot);
 }
 
@@ -167,45 +155,4 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
         .expect("Couldn't create byte array from slice. Please file a GitHub issue");
     let _ = Arc::into_raw(discord_bot);
     result
-}
-
-#[no_mangle]
-pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1resetSenders(
-    _env: JNIEnv<'_>,
-    _obj: jobject,
-    ptr: jlong,
-) {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<DiscordBot>) };
-
-    if let Err(e) = discord_bot.lock().unwrap().reset_senders() {
-        info!(
-            "Error for bot with vc_id {} when resetting senders: {e:#}",
-            discord_bot.lock().unwrap().vc_id
-        );
-    }
-    let _ = Arc::into_raw(discord_bot);
-}
-
-#[no_mangle]
-pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addPlayerToGroup(
-    _env: JNIEnv,
-    _obj: jobject,
-    ptr: jlong,
-    sender_id: jint,
-) {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<super::DiscordBot>) };
-    discord_bot.lock().unwrap().add_player_to_group(sender_id);
-    let _ = Arc::into_raw(discord_bot);
-}
-
-#[no_mangle]
-pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1removePlayerFromGroup(
-    _env: JNIEnv,
-    _obj: jobject,
-    ptr: jlong,
-    sender_id: jint,
-) {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const std::sync::Mutex<super::DiscordBot>) };
-    discord_bot.lock().unwrap().remove_player_from_group(sender_id);
-    let _ = Arc::into_raw(discord_bot);
 }
