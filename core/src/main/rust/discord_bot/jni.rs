@@ -140,23 +140,39 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
     _obj: jobject,
     ptr: jlong,
 ) -> JByteArray<'_> {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+    // Defensive: check for null pointer
+    if ptr == 0 {
+        tracing::error!("JNI blockForSpeakingBufferOpusData called with null pointer");
+        return env
+            .byte_array_from_slice(&[])
+            .expect("Couldn't create byte array from slice. Please file a GitHub issue");
+    }
 
-    let opus_data = match discord_bot.block_for_speaking_opus_data() {
-        Ok(d) => d,
-        Err(e) => {
-            info!(
-                "Failed to get speaking opus data for bot with vc_id {}: {e:#}",
-                discord_bot.vc_id
-            );
-            return env
-                .byte_array_from_slice(&[])
-                .expect("Couldn't create byte array from slice. Please file a GitHub issue");
+    let result = std::panic::catch_unwind(|| {
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+        let opus_data = match discord_bot.block_for_speaking_opus_data() {
+            Ok(d) => d,
+            Err(e) => {
+                info!(
+                    "Failed to get speaking opus data for bot with vc_id {}: {e:#}",
+                    discord_bot.vc_id
+                );
+                return env
+                    .byte_array_from_slice(&[])
+                    .expect("Couldn't create byte array from slice. Please file a GitHub issue");
+            }
+        };
+        let result = env.byte_array_from_slice(&opus_data)
+            .expect("Couldn't create byte array from slice. Please file a GitHub issue");
+        let _ = Arc::into_raw(discord_bot);
+        result
+    });
+    match result {
+        Ok(arr) => arr,
+        Err(_) => {
+            tracing::error!("Panic in blockForSpeakingBufferOpusData");
+            env.byte_array_from_slice(&[])
+                .expect("Couldn't create byte array from slice. Please file a GitHub issue")
         }
-    };
-
-    let result = env.byte_array_from_slice(&opus_data)
-        .expect("Couldn't create byte array from slice. Please file a GitHub issue");
-    let _ = Arc::into_raw(discord_bot);
-    result
+    }
 }
