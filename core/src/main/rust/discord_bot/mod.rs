@@ -124,9 +124,15 @@ impl DiscordBot {
     }
 
     pub fn block_for_speaking_opus_data(&self) -> Result<Vec<u8>, Report> {
-        self.received_audio_rx
-            .recv_timeout(Duration::from_secs(1))
-            .wrap_err("failed to recv receive_audio")
+        match self.received_audio_rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(data) => Ok(data),
+            Err(flume::RecvTimeoutError::Timeout) => {
+                Err(eyre::eyre!("no one is speaking (timeout waiting for audio)"))
+            }
+            Err(flume::RecvTimeoutError::Disconnected) => {
+                Err(eyre::eyre!("audio channel closed (bot disconnected or no senders)"))
+            }
+        }
     }
 
     /// Decode Opus payload and send PCM to the group buffer
