@@ -120,16 +120,42 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
     group_id_bytes: JByteArray<'local>,
     raw_opus_data: JByteArray<'local>,
 ) {
+    tracing::info!("JNI addAudioToHearingBuffer called: ptr={:#x}", ptr);
+
     let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
 
-    let group_id = {
-        let bytes = env.convert_byte_array(group_id_bytes).expect("Unable to convert group_id bytes");
-        uuid::Uuid::from_slice(&bytes).expect("Invalid group_id bytes")
+    let group_id = match env.convert_byte_array(group_id_bytes) {
+        Ok(bytes) => match uuid::Uuid::from_slice(&bytes) {
+            Ok(uuid) => {
+                uuid
+            }
+            Err(e) => {
+                tracing::error!("Invalid group_id bytes: {:?}", e);
+                let _ = Arc::into_raw(discord_bot);
+                return;
+            }
+        },
+        Err(e) => {
+            tracing::error!("Unable to convert group_id bytes: {:?}", e);
+            let _ = Arc::into_raw(discord_bot);
+            return;
+        }
     };
 
-    let raw_opus_data = env.convert_byte_array(raw_opus_data).expect("Unable to convert byte array");
+    let raw_opus_data = match env.convert_byte_array(raw_opus_data) {
+        Ok(data) => {
+            tracing::info!("Opus data length: {}", data.len());
+            data
+        }
+        Err(e) => {
+            tracing::error!("Unable to convert opus byte array: {:?}", e);
+            let _ = Arc::into_raw(discord_bot);
+            return;
+        }
+    };
 
-    discord_bot.add_audio_to_group_buffer(group_id, &raw_opus_data);
+    // This is Minecraft -> Discord, so use mc_to_discord_buffers
+    discord_bot.add_pcm_to_playback_buffer(group_id, raw_opus_data);
 
     let _ = Arc::into_raw(discord_bot);
 }
@@ -150,13 +176,18 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
 
     let result = std::panic::catch_unwind(|| {
         let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+        // This is Discord -> Minecraft, so use discord_to_mc_buffers
         let opus_data = match discord_bot.block_for_speaking_opus_data() {
             Ok(d) => d,
             Err(e) => {
-                info!(
-                    "Failed to get speaking opus data for bot with vc_id {}: {e:#}",
-                    discord_bot.vc_id
-                );
+                let msg = format!("{e}");
+                if msg.contains("audio channel closed") {
+                    info!(
+                        "Failed to get speaking opus data for bot with vc_id {}: {e:#}",
+                        discord_bot.vc_id
+                    );
+                }
+                let _ = Arc::into_raw(discord_bot);
                 return env
                     .byte_array_from_slice(&[])
                     .expect("Couldn't create byte array from slice. Please file a GitHub issue");
@@ -170,7 +201,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
     match result {
         Ok(arr) => arr,
         Err(_) => {
-            tracing::error!("Panic in blockForSpeakingBufferOpusData");
+            tracing::error!("Panic in blockForSpeakingBufferOpusData for ptr: {:#x}", ptr);
             env.byte_array_from_slice(&[])
                 .expect("Couldn't create byte array from slice. Please file a GitHub issue")
         }

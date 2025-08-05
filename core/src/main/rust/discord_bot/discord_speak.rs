@@ -15,8 +15,9 @@ use crate::audio_util::{CHANNELS, SAMPLE_RATE};
 use crate::discord_bot::GroupAudioBuffer;
 
 #[inline]
-pub fn create_playable_input(group_buffers: Arc<dashmap::DashMap<Uuid, GroupAudioBuffer>>) -> Result<Input, Report> {
-    let audio_source = GroupAudioSource { group_buffers };
+/// Only use mc_to_discord_buffers for Minecraft->Discord audio
+pub fn create_playable_input(mc_to_discord_buffers: Arc<dashmap::DashMap<Uuid, GroupAudioBuffer>>) -> Result<Input, Report> {
+    let audio_source = GroupAudioSource { mc_to_discord_buffers };
     let input: Input = RawAdapter::new(audio_source, SAMPLE_RATE, CHANNELS).into();
     let input = match input {
         Input::Live(i, _) => i,
@@ -29,21 +30,31 @@ pub fn create_playable_input(group_buffers: Arc<dashmap::DashMap<Uuid, GroupAudi
 }
 
 struct GroupAudioSource {
-    group_buffers: Arc<dashmap::DashMap<Uuid, GroupAudioBuffer>>,
+    mc_to_discord_buffers: Arc<dashmap::DashMap<Uuid, GroupAudioBuffer>>,
 }
 
 impl io::Read for GroupAudioSource {
     fn read(&mut self, mut buf: &mut [u8]) -> io::Result<usize> {
-        // For now, just use the first group buffer if present
-        let mut written = 0;
-        if let Some(entry) = self.group_buffers.iter().next() {
-            let buffer_rx = &entry.value().buffer_rx;
+        use tracing::info;
+        let mut all_samples = Vec::new();
+        let mut total_buffered = 0;
+        for entry in self.mc_to_discord_buffers.iter() {
+            let buffer_rx = &entry.value().pcm_buffer_rx;
+            let buffered = buffer_rx.len();
+            total_buffered += buffered;
+            info!(group=?entry.key(), "PCM buffer occupancy: {} packets", buffered);
             if let Ok(samples) = buffer_rx.try_recv() {
-                for sample in samples {
-                    let converted = (sample as f32) / (i16::MIN as f32).abs();
-                    written += buf.write(&converted.to_le_bytes())?;
-                }
+                info!(group=?entry.key(), "Read {} samples from group buffer", samples.len());
+                all_samples.push(samples);
             }
+        }
+        info!("Total PCM packets buffered across all groups: {}", total_buffered);
+        let combined = crate::audio_util::combine_audio_parts(all_samples);
+        // Write: output as f32 PCM bytes (Discord expects f32 samples)
+        let mut written = 0;
+        for sample in combined.iter() {
+            let converted = (*sample as f32) / (i16::MAX as f32);
+            written += buf.write(&converted.to_le_bytes())?;
         }
         Ok(written)
     }

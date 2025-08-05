@@ -30,29 +30,37 @@ public final class GroupManager {
         return players;
     }
 
+    private static void createStaticAudioChannelIfFirstGroup(Group group, ServerPlayer player, VoicechatConnection connection) {
+        if (firstGroupId != null && firstGroupId.equals(group.getId())) {
+            platform.info("[createStaticAudioChannelIfFirstGroup] Attempting to create StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId());
+            var level = player.getServerLevel();
+            var channelId = group.getId();
+            var staticChannel = api.createStaticAudioChannel(channelId, level, connection);
+            if (staticChannel != null) {
+                groupAudioChannels.computeIfAbsent(channelId, k -> new HashMap<>()).put(player.getUuid(), staticChannel);
+                platform.info("Created StaticAudioChannel for player " + player.getUuid() + " in group " + channelId);
+            } else {
+                platform.error("Failed to create StaticAudioChannel for player " + player.getUuid() + " in group " + channelId);
+            }
+        } else {
+            platform.info("[createStaticAudioChannelIfFirstGroup] Not first group or firstGroupId not set, skipping StaticAudioChannel creation.");
+        }
+    }
+
     @SuppressWarnings("DataFlowIssue")
     public static void onJoinGroup(JoinGroupEvent event) {
         Group group = event.getGroup();
         ServerPlayer player = event.getConnection().getPlayer();
 
+        platform.info("[onJoinGroup] Event fired for group: " + group.getName() + " (" + group.getId() + ") and player: " + platform.getName(player) + " (" + player.getUuid() + ")");
+        platform.info("[onJoinGroup] firstGroupId=" + firstGroupId + ", groupId=" + group.getId());
+
         List<ServerPlayer> players = getPlayers(group);
+        platform.info("[onJoinGroup] Current players in group: " + players.size());
         if (players.stream().noneMatch(serverPlayer -> serverPlayer.getUuid() == player.getUuid())) {
             platform.info(player.getUuid() + " (" + platform.getName(player) + ") joined " + group.getId() + " (" + group.getName() + ")");
             players.add(player);
-            // If this is the first group, create StaticAudioChannel for this player
-            if (firstGroupId != null && firstGroupId.equals(group.getId())) {
-                // Create StaticAudioChannel for this player
-                var connection = event.getConnection();
-                var level = player.getServerLevel();
-                var channelId = group.getId();
-                var staticChannel = api.createStaticAudioChannel(channelId, level, connection);
-                if (staticChannel != null) {
-                    groupAudioChannels.computeIfAbsent(channelId, k -> new HashMap<>()).put(player.getUuid(), staticChannel);
-                    platform.info("Created StaticAudioChannel for player " + player.getUuid() + " in group " + channelId);
-                } else {
-                    platform.error("Failed to create StaticAudioChannel for player " + player.getUuid() + " in group " + channelId);
-                }
-            }
+            createStaticAudioChannelIfFirstGroup(group, player, event.getConnection());
         } else {
             platform.info(player.getUuid() + " (" + platform.getName(player) + ") already joined " + group.getId() + " (" + group.getName() + ")");
         }
@@ -134,6 +142,7 @@ public final class GroupManager {
 
         List<ServerPlayer> players = getPlayers(group);
         players.add(player);
+        createStaticAudioChannelIfFirstGroup(group, player, connection);
     }
 
     @SuppressWarnings("DataFlowIssue")
@@ -141,15 +150,16 @@ public final class GroupManager {
         Group group = event.getGroup();
         UUID groupId = group.getId();
 
-        platform.info(groupId + " (" + groupFriendlyIds.get(groupId) + ", " + group.getName() + ")" + " was removed");
+        platform.info("onGroupRemoved: Group removed: " + groupId + " (" + groupFriendlyIds.get(groupId) + ", " + group.getName() + ")");
 
         if (firstGroupId != null && firstGroupId.equals(groupId)) {
-            platform.info("First group removed: " + group.getName() + " (" + groupId + ")");
+            platform.info("onGroupRemoved: First group removed: " + group.getName() + " (" + groupId + ")");
             firstGroupId = null;
             // Stop Discord bot for the first group
             if (!Core.bots.isEmpty() && Core.bots.get(0).isStarted()) {
+                platform.info("onGroupRemoved: Stopping Discord bot for first group: " + group.getName() + " (vc_id=" + Core.bots.get(0).vcId + ")");
                 Core.bots.get(0).stop();
-                platform.info("Stopped Discord bot for first group: " + group.getName());
+                platform.info("onGroupRemoved: Stopped Discord bot for first group: " + group.getName() + " (vc_id=" + Core.bots.get(0).vcId + ")");
             }
             // Remove all StaticAudioChannels for this group
             groupAudioChannels.remove(groupId);

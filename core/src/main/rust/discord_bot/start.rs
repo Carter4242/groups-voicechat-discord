@@ -39,7 +39,7 @@ impl super::DiscordBot {
         let vc_id = bot.vc_id;
         let guild_id = channel.guild_id;
         let received_audio_tx = bot.received_audio_tx.clone();
-        let group_buffers = Arc::clone(&bot.group_buffers);
+        let mc_to_discord_buffers = Arc::clone(&bot.mc_to_discord_buffers);
         let bot_for_async = Arc::clone(&bot);
         {
             if let Err(e) = RUNTIME.block_on(async move {
@@ -51,10 +51,10 @@ impl super::DiscordBot {
 
                 // Check connection state
                 if let Some(conn) = call.current_connection() {
-                    if !conn.connected { // Songbird connection struct has a 'connected' field
-                        tracing::warn!("Songbird call is not connected after join; audio bridging will not work");
+                    if conn.session_id.is_empty() || conn.endpoint.is_empty() {
+                        tracing::warn!("Songbird call may not be fully connected (missing session_id or endpoint); audio bridging may not work");
                     } else {
-                        tracing::info!("Songbird call is connected and streaming");
+                        tracing::info!("Songbird call has session_id and endpoint; likely connected");
                     }
                 } else {
                     tracing::warn!("Songbird call has no active connection after join; audio bridging will not work");
@@ -69,7 +69,7 @@ impl super::DiscordBot {
                     },
                 );
 
-                call.play_only_input(create_playable_input(group_buffers)?);
+                call.play_only_input(create_playable_input(mc_to_discord_buffers)?);
                 // TODO: track error handling
 
                 eyre::Ok(())

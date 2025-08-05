@@ -34,6 +34,6 @@ public abstract class VoicechatPlugin implements de.maxhenkel.voicechat.api.Voic
         registration.registerEvent(RemoveGroupEvent.class, GroupManager::onGroupRemoved);
 
         // Bridge Minecraft group audio to Discord
-        registration.registerEvent(StaticSoundPacketEvent.class, DiscordBot::handleStaticSoundPacketEvent);
+        registration.registerEvent(MicrophonePacketEvent.class, DiscordBot::handleGroupMicrophonePacketEvent);
     }
 }

@@ -2,7 +2,6 @@ package dev.amsam0.voicechatdiscord;
 
 import de.maxhenkel.voicechat.api.ServerPlayer;
 import de.maxhenkel.voicechat.api.Group;
-import de.maxhenkel.voicechat.api.packets.SoundPacket;
 import de.maxhenkel.voicechat.api.packets.StaticSoundPacket;
 
 import java.util.Map;
@@ -19,7 +18,7 @@ public final class DiscordBot {
     private volatile boolean running = false;
     private volatile boolean freed = false;
     // Discord connection and bridging logic
-    private final long vcId;
+    public final long vcId;
     private final long ptr;
 
     /**
@@ -46,17 +45,36 @@ public final class DiscordBot {
     }
 
     /**
-     * Handles a StaticSoundPacketEvent for bridging Minecraft group audio to Discord.
+     * Handles a MicrophonePacketEvent for bridging Minecraft group audio to Discord (including solo group members).
      */
-    public static void handleStaticSoundPacketEvent(de.maxhenkel.voicechat.api.events.StaticSoundPacketEvent event) {
-        if (event.getPacket() != null && !Core.bots.isEmpty()) {
+    public static void handleGroupMicrophonePacketEvent(de.maxhenkel.voicechat.api.events.MicrophonePacketEvent event) {
+        try {
             var senderConn = event.getSenderConnection();
-            if (senderConn != null) {
-                var sender = senderConn.getPlayer();
-                if (sender != null) {
-                    Core.bots.get(0).handlePacket(event.getPacket(), sender);
-                }
+            if (senderConn == null) {
+                platform.info("[handleGroupMicrophonePacketEvent] No sender connection, ignoring.");
+                return;
             }
+            var group = senderConn.getGroup();
+            if (group == null) {
+                return;
+            }
+            var sender = senderConn.getPlayer();
+            if (sender == null) {
+                platform.info("[handleGroupMicrophonePacketEvent] No sender player, ignoring.");
+                return;
+            }
+            if (Core.bots.isEmpty()) {
+                platform.warn("[handleGroupMicrophonePacketEvent] No bots available!");
+                return;
+            }
+            var packet = event.getPacket();
+            if (!(packet instanceof de.maxhenkel.voicechat.api.packets.ConvertablePacket convertable)) {
+                platform.warn("[handleGroupMicrophonePacketEvent] Packet is not convertable to StaticSoundPacket!");
+                return;
+            }
+            Core.bots.get(0).handlePacket(convertable.staticSoundPacketBuilder().build(), sender);
+        } catch (Throwable t) {
+            platform.error("[handleGroupMicrophonePacketEvent] Exception occurred", t);
         }
     }
 
@@ -77,20 +95,22 @@ public final class DiscordBot {
         }
         running = true;
         discordAudioThread = new Thread(() -> {
+            long lastSendTime = System.currentTimeMillis();
             while (running && !freed) {
                 try {
                     if (freed) break;
                     byte[] opusData = _blockForSpeakingBufferOpusData(ptr);
                     if (freed) break;
+                    long now = System.currentTimeMillis();
+                    long delta = now - lastSendTime;
                     if (opusData != null && opusData.length > 0) {
                         sendDiscordAudioToGroup(opusData);
+                        lastSendTime = now;
                     }
                 } catch (Throwable t) {
-                    platform.error("Error in Discord audio thread", t);
+                    platform.error("Error in Discord audio thread for bot vc_id=" + vcId, t);
                 }
-                try {
-                    Thread.sleep(20); // ~50 packets/sec (20ms per Discord frame)
-                } catch (InterruptedException ignored) {}
+                // No fixed sleep; send audio as soon as available
             }
         }, "DiscordAudioBridgeThread");
         discordAudioThread.setDaemon(true);
@@ -132,7 +152,7 @@ public final class DiscordBot {
             platform.debug("Logged into the bot with vc_id " + vcId);
             return true;
         } catch (Throwable e) {
-            platform.error("Failed to login to the bot with vc_id " + vcId, e);
+            platform.error("Failed to login to the bot with vc_id=" + vcId, e);
             return false;
         }
     }
@@ -142,9 +162,9 @@ public final class DiscordBot {
     private void start() {
         try {
             String vcName = _start(ptr);
-            platform.info("Started voice chat for group in channel " + vcName + " with bot with vc_id " + vcId);
+            platform.info("Started voice chat for group in channel " + vcName + " with bot with vc_id=" + vcId);
         } catch (Throwable e) {
-            platform.error("Failed to start voice connection for bot with vc_id " + vcId, e);
+            platform.error("Failed to start voice connection for bot with vc_id=" + vcId, e);
         }
     }
 
@@ -155,9 +175,9 @@ public final class DiscordBot {
             stopDiscordAudioThread();
             _stop(ptr);
         } catch (Throwable e) {
-            platform.error("Failed to stop bot with vc_id " + vcId, e);
+            platform.error("Failed to stop bot with vc_id=" + vcId, e);
         }
-        platform.debug("Stopped bot with vc_id " + vcId);
+        platform.info("DiscordBot.stop finished for vc_id=" + vcId);
     }
 
     private native void _free(long ptr);
@@ -166,9 +186,11 @@ public final class DiscordBot {
      * Safety: the class should be discarded after calling
      */
     public void free() {
+        platform.info("DiscordBot.free called for vc_id=" + vcId);
         freed = true;
         stopDiscordAudioThread();
         _free(ptr);
+        platform.info("DiscordBot.free finished for vc_id=" + vcId);
     }
 
     private native void _addAudioToHearingBuffer(long ptr, byte[] groupIdBytes, byte[] rawOpusData);
@@ -176,13 +198,9 @@ public final class DiscordBot {
     /**
      * Receives a group audio packet from Minecraft and sends it to Discord.
      */
-    public void handlePacket(SoundPacket packet, ServerPlayer player) {
+    public void handlePacket(StaticSoundPacket packet, ServerPlayer player) {
         if (freed) {
             platform.warn("handlePacket called after bot was freed");
-            return;
-        }
-        if (!(packet instanceof StaticSoundPacket)) {
-            platform.warn("handlePacket called with non-group packet: " + packet.getClass().getSimpleName());
             return;
         }
         // Extract group ID from VoicechatConnection
@@ -197,6 +215,17 @@ public final class DiscordBot {
         }
         byte[] groupIdBytes = uuidToBytes(groupId);
         byte[] opusData = packet.getOpusEncodedData();
+        platform.info("[handlePacket] opusData length=" + (opusData != null ? opusData.length : -1));
+        //platform.info("handlePacket called, packet len: " + (opusData != null ? opusData.length : "null"));
+        if (opusData != null && opusData.length > 0) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Opus packet first 10 bytes: [");
+            for (int i = 0; i < Math.min(10, opusData.length); i++) {
+                sb.append(opusData[i]).append(i < Math.min(9, opusData.length - 1) ? ", " : "");
+            }
+            sb.append("]");
+            //platform.info(sb.toString());
+        }
         _addAudioToHearingBuffer(ptr, groupIdBytes, opusData);
     }
 
