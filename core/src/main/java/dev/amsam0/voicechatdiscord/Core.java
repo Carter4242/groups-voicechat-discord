@@ -130,6 +130,4 @@ public final class Core {
         });
         bots.clear();
     }
-
-    // Removed obsolete per-player bot management and player leave handler
 }
