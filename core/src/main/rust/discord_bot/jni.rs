@@ -120,7 +120,6 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
     group_id_bytes: JByteArray<'local>,
     raw_opus_data: JByteArray<'local>,
 ) {
-    tracing::info!("JNI addAudioToHearingBuffer called: ptr={:#x}", ptr);
 
     let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
 
@@ -144,7 +143,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
 
     let raw_opus_data = match env.convert_byte_array(raw_opus_data) {
         Ok(data) => {
-            tracing::info!("Opus data length: {}", data.len());
+            tracing::info!("Adding new packet to group_id: {} (length: {})", group_id, data.len());
             data
         }
         Err(e) => {

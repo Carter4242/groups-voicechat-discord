@@ -15,14 +15,7 @@ pub type RawAudio = [i16; RAW_AUDIO_SIZE];
 
 pub fn combine_audio_parts(parts: Vec<RawAudio>) -> RawAudio {
     // Based on https://github.com/DV8FromTheWorld/JDA/blob/11c5bf02a1f4df3372ab68e0ccb4a94d0db368df/src/main/java/net/dv8tion/jda/internal/audio/AudioConnection.java#L529
-    use tracing::info;
-    //info!("combine_audio_parts called: {} input parts", parts.len());
-    for (i, part) in parts.iter().enumerate() {
-        info!("part {} length: {} samples ({} ms)", i, part.len(), (part.len() as f32 / 48_000.0 * 1000.0));
-        //info!("part {} first 10 samples: {:?}", i, &part[..10.min(part.len())]);
-    }
     let Some(max_length) = parts.iter().map(|p| p.len()).max() else {
-        //info!("combine_audio_parts: no input parts, returning silence");
         return [0; RAW_AUDIO_SIZE];
     };
     //info!("combine_audio_parts: max_length={} samples ({} ms)", max_length, (max_length as f32 / 48_000.0 * 1000.0));

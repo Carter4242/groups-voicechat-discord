@@ -95,22 +95,18 @@ public final class DiscordBot {
         }
         running = true;
         discordAudioThread = new Thread(() -> {
-            long lastSendTime = System.currentTimeMillis();
             while (running && !freed) {
                 try {
                     if (freed) break;
                     byte[] opusData = _blockForSpeakingBufferOpusData(ptr);
                     if (freed) break;
-                    long now = System.currentTimeMillis();
-                    long delta = now - lastSendTime;
+
                     if (opusData != null && opusData.length > 0) {
                         sendDiscordAudioToGroup(opusData);
-                        lastSendTime = now;
                     }
                 } catch (Throwable t) {
                     platform.error("Error in Discord audio thread for bot vc_id=" + vcId, t);
                 }
-                // No fixed sleep; send audio as soon as available
             }
         }, "DiscordAudioBridgeThread");
         discordAudioThread.setDaemon(true);
@@ -216,16 +212,6 @@ public final class DiscordBot {
         byte[] groupIdBytes = uuidToBytes(groupId);
         byte[] opusData = packet.getOpusEncodedData();
         platform.info("[handlePacket] opusData length=" + (opusData != null ? opusData.length : -1));
-        //platform.info("handlePacket called, packet len: " + (opusData != null ? opusData.length : "null"));
-        if (opusData != null && opusData.length > 0) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("Opus packet first 10 bytes: [");
-            for (int i = 0; i < Math.min(10, opusData.length); i++) {
-                sb.append(opusData[i]).append(i < Math.min(9, opusData.length - 1) ? ", " : "");
-            }
-            sb.append("]");
-            //platform.info(sb.toString());
-        }
         _addAudioToHearingBuffer(ptr, groupIdBytes, opusData);
     }
 

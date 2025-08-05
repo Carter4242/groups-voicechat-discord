@@ -169,7 +169,6 @@ impl DiscordBot {
     pub fn block_for_speaking_opus_data(&self) -> Result<Vec<u8>, Report> {
         let buffer_len = self.received_audio_rx.len();
         let buffer_ms = buffer_len as u32 * 20; // 20ms per packet
-        tracing::info!("Consumer buffer size: {} packets ({} ms) for vc_id={}", buffer_len, buffer_ms, self.vc_id);
         match self.received_audio_rx.recv_timeout(Duration::from_secs(1)) {
             Ok(data) => Ok(data),
             Err(flume::RecvTimeoutError::Timeout) => {
@@ -204,7 +203,6 @@ impl DiscordBot {
             Ok(_) => {
                 let len = audio.len();
                 // Log first 10 samples of decoded PCM before sending to buffer
-                tracing::info!("First 10 decoded PCM samples for group_id={}: {:?}", group_id, &audio[..10.min(audio.len())]);
                 match audio.try_into() {
                     Ok(pcm) => {
                         let buffer = self.mc_to_discord_buffers.entry(group_id)
@@ -219,7 +217,7 @@ impl DiscordBot {
                                 }
                             });
                         let pcm_buffer_occupancy = buffer.pcm_buffer_tx.len();
-                        tracing::info!("[Minecraft->Discord] PCM buffer occupancy for group_id={}: {} packets", group_id, pcm_buffer_occupancy);
+                        //tracing::info!("[Minecraft->Discord] PCM buffer occupancy for group_id={}: {} packets", group_id, pcm_buffer_occupancy);
                         if buffer.pcm_buffer_tx.is_full() {
                             tracing::warn!("Group PCM buffer is full for group_id={}", group_id);
                             return;
