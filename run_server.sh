@@ -1,6 +1,4 @@
-#!/usr/bin/env bash
 
-set -e
 
 pluginVersion="3.0.11"
 fabricLoaderVersion="0.16.13"
