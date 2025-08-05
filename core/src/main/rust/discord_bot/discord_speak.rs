@@ -36,118 +36,26 @@ struct GroupAudioSource {
 impl io::Read for GroupAudioSource {
     fn read(&mut self, mut buf: &mut [u8]) -> io::Result<usize> {
         use tracing::info;
-        use std::time::{SystemTime, UNIX_EPOCH};
-        use std::collections::VecDeque;
-        use std::sync::Mutex;
-        use once_cell::sync::Lazy;
-        const JITTER_BUFFER_SIZE: usize = 40;
-        static JITTER_BUFFER: Lazy<Mutex<VecDeque<[i16; 960]>>> = Lazy::new(|| Mutex::new(VecDeque::with_capacity(JITTER_BUFFER_SIZE)));
-
-        let mut jitter_buffer = JITTER_BUFFER.lock().unwrap();
-
-        // Block to fill to JITTER_BUFFER_SIZE only at startup or when buffer drops to zero
-        let mut refill_attempts = 0;
-        if jitter_buffer.len() == 0 {
-            //info!("[JitterBuffer] Buffer is empty, blocking to refill to {} packets", JITTER_BUFFER_SIZE);
-            while jitter_buffer.len() < JITTER_BUFFER_SIZE {
-                let mut filled = false;
-                for entry in self.mc_to_discord_buffers.iter() {
-                    let buffer_rx = &entry.value().pcm_buffer_rx;
-                    let buffered = buffer_rx.len();
-                    //info!(group=?entry.key(), "[JitterBuffer] PCM buffer occupancy: {} packets (refilling, have {})", buffered, jitter_buffer.len());
-                    match buffer_rx.try_recv() {
-                        Ok(samples) => {
-                            jitter_buffer.push_back(samples);
-                            filled = true;
-                            //info!(group=?entry.key(), "[JitterBuffer] Added packet to jitter buffer (now {})", jitter_buffer.len());
-                        },
-                        Err(flume::TryRecvError::Empty) => {},
-                        Err(flume::TryRecvError::Disconnected) => {
-                            info!(group=?entry.key(), "PCM buffer disconnected");
-                        }
-                    }
-                }
-                if !filled {
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                    refill_attempts += 1;
-                    if refill_attempts % 50 == 0 {
-                        info!("[JitterBuffer] Still waiting to refill to {} packets (waited {}ms)", JITTER_BUFFER_SIZE, refill_attempts * 2);
-                    }
-                }
-            }
-        }
-
-        // Pop one packet and send (if buffer is not empty)
-        let samples = match jitter_buffer.pop_front() {
-            Some(samples) => {
-                //info!("[JitterBuffer] Sent packet, jitter buffer now has {} packets", jitter_buffer.len());
-                samples
-            },
-            None => {
-                // Buffer is empty, block and refill to JITTER_BUFFER_SIZE
-                //info!("[JitterBuffer] Buffer empty during send, blocking to refill to {} packets", JITTER_BUFFER_SIZE);
-                refill_attempts = 0;
-                while jitter_buffer.len() < JITTER_BUFFER_SIZE {
-                    let mut filled = false;
-                    for entry in self.mc_to_discord_buffers.iter() {
-                        let buffer_rx = &entry.value().pcm_buffer_rx;
-                        let buffered = buffer_rx.len();
-                        //info!(group=?entry.key(), "[JitterBuffer] PCM buffer occupancy: {} packets (refilling, have {})", buffered, jitter_buffer.len());
-                        match buffer_rx.try_recv() {
-                            Ok(samples) => {
-                                jitter_buffer.push_back(samples);
-                                filled = true;
-                                //info!(group=?entry.key(), "[JitterBuffer] Added packet to jitter buffer (now {})", jitter_buffer.len());
-                            },
-                            Err(flume::TryRecvError::Empty) => {},
-                            Err(flume::TryRecvError::Disconnected) => {
-                                info!(group=?entry.key(), "PCM buffer disconnected");
-                            }
-                        }
-                    }
-                    if !filled {
-                        std::thread::sleep(std::time::Duration::from_millis(2));
-                        refill_attempts += 1;
-                        if refill_attempts % 50 == 0 {
-                            info!("[JitterBuffer] Still waiting to refill to {} packets (waited {}ms)", JITTER_BUFFER_SIZE, refill_attempts * 2);
-                        }
-                    }
-                }
-                let samples = jitter_buffer.pop_front().expect("Jitter buffer should have at least one packet after refill");
-                //info!("[JitterBuffer] Sent packet after forced refill, jitter buffer now has {} packets", jitter_buffer.len());
-                samples
-            }
-        };
-
-        // Try to refill buffer (non-blocking)
+        let mut all_samples = Vec::new();
+        let mut total_buffered = 0;
         for entry in self.mc_to_discord_buffers.iter() {
             let buffer_rx = &entry.value().pcm_buffer_rx;
-            match buffer_rx.try_recv() {
-                Ok(samples) => {
-                    jitter_buffer.push_back(samples);
-                    //info!(group=?entry.key(), "[JitterBuffer] Refilled packet after send (now {})", jitter_buffer.len());
-                },
-                _ => {}
+            let buffered = buffer_rx.len();
+            total_buffered += buffered;
+            info!(group=?entry.key(), "PCM buffer occupancy: {} packets", buffered);
+            if let Ok(samples) = buffer_rx.try_recv() {
+                info!(group=?entry.key(), "Read {} samples from group buffer", samples.len());
+                all_samples.push(samples);
             }
         }
+        info!("Total PCM packets buffered across all groups: {}", total_buffered);
+        let combined = crate::audio_util::combine_audio_parts(all_samples);
 
-        // Log first and last 5 frames of the packet
-        info!("Sent packet first 5 frames: {:?}", &samples[..5]);
-        info!("Sent packet last 5 frames: {:?}", &samples[samples.len()-5..]);
-
-        // Write: output as f32 PCM bytes (Discord expects f32 samples)
         let mut written = 0;
-        for sample in samples.iter() {
+        for sample in combined.iter() {
             let converted = (*sample as f32) / (i16::MAX as f32);
             written += buf.write(&converted.to_le_bytes())?;
         }
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        info!(
-            "GroupAudioSource::read called: requested_buf_size={} written_size={} timestamp={:?}",
-            buf.len(),
-            written,
-            now
-        );
         Ok(written)
     }
 }
