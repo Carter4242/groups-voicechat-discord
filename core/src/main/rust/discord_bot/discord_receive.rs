@@ -18,6 +18,7 @@ impl EventHandler for VoiceHandler {
     async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
         if let EventContext::VoiceTick(tick) = ctx {
             if self.received_audio_tx.is_full() {
+               tracing::warn!("VoiceHandler receive buffer is full for vc_id={}", self.vc_id);
                 debug!("Receive buffer is full");
                 return None;
             }
@@ -26,10 +27,12 @@ impl EventHandler for VoiceHandler {
                 return None;
             };
             let Some(data) = data.packet.as_ref() else {
+               tracing::warn!("VoiceHandler: Missing packet for vc_id={}", self.vc_id);
                 debug!("Missing packet");
                 return None;
             };
             let Some(rtp) = RtpPacket::new(&data.packet) else {
+               tracing::warn!("VoiceHandler: Unable to parse RTP packet for vc_id={}", self.vc_id);
                 warn!("Unable to parse packet");
                 return None;
             };
@@ -41,6 +44,7 @@ impl EventHandler for VoiceHandler {
                 match RtpExtensionPacket::new(payload).map(|pkt| pkt.packet_size()) {
                     Some(s) => s,
                     None => {
+                       tracing::warn!("VoiceHandler: Unable to parse extension packet for vc_id={}", self.vc_id);
                         warn!("Unable to parse extension packet");
                         return None;
                     }
@@ -53,12 +57,15 @@ impl EventHandler for VoiceHandler {
 
             // Only route audio if bot is in Started state
             if !self.bot.is_audio_active() {
+               tracing::warn!("VoiceHandler: DiscordBot is not in Started state; audio bridging is disabled for vc_id={}", self.vc_id);
                 warn!("DiscordBot is not in Started state; audio bridging is disabled");
                 return None;
             }
+
             self.bot.decode_and_route_to_groups(&payload);
 
             if self.received_audio_tx.send(payload).is_err() {
+               tracing::error!("VoiceHandler: received_audio_tx dropped for vc_id={}; bot may have been stopped or freed", self.vc_id);
                 warn!("received_audio rx dropped; bot may have been stopped or freed");
             }
         }
