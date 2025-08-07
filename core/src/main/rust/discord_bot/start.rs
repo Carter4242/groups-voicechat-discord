@@ -25,7 +25,7 @@ impl super::DiscordBot {
         };
 
         // In case there are any packets left over
-        bot.received_audio_rx.drain();
+        bot.discord_to_mc_buffer.received_audio_rx.drain();
 
         let channel = match RUNTIME
             .block_on(http.get_channel(bot.vc_id))
@@ -38,7 +38,6 @@ impl super::DiscordBot {
         let songbird = bot.songbird.clone();
         let vc_id = bot.vc_id;
         let guild_id = channel.guild_id;
-        let received_audio_tx = bot.received_audio_tx.clone();
         let mc_to_discord_buffers = Arc::clone(&bot.mc_to_discord_buffers);
         let bot_for_async = Arc::clone(&bot);
         {
@@ -64,7 +63,6 @@ impl super::DiscordBot {
                     CoreEvent::VoiceTick.into(),
                     VoiceHandler {
                         vc_id,
-                        received_audio_tx,
                         bot: Arc::clone(&bot_for_async),
                     },
                 );

@@ -12,11 +12,11 @@ use songbird::input::{
 };
 
 use crate::audio_util::{CHANNELS, SAMPLE_RATE};
-use crate::discord_bot::GroupAudioBuffer;
+use crate::discord_bot::MinecraftToDiscordBuffer;
 
 #[inline]
-/// Only use mc_to_discord_buffers for Minecraft->Discord audio
-pub fn create_playable_input(mc_to_discord_buffers: Arc<dashmap::DashMap<Uuid, GroupAudioBuffer>>) -> Result<Input, Report> {
+
+pub fn create_playable_input(mc_to_discord_buffers: Arc<dashmap::DashMap<Uuid, MinecraftToDiscordBuffer>>) -> Result<Input, Report> {
     let audio_source = GroupAudioSource { mc_to_discord_buffers };
     let input: Input = RawAdapter::new(audio_source, SAMPLE_RATE, CHANNELS).into();
     let input = match input {
@@ -30,25 +30,25 @@ pub fn create_playable_input(mc_to_discord_buffers: Arc<dashmap::DashMap<Uuid, G
 }
 
 struct GroupAudioSource {
-    mc_to_discord_buffers: Arc<dashmap::DashMap<Uuid, GroupAudioBuffer>>,
+    mc_to_discord_buffers: Arc<dashmap::DashMap<Uuid, MinecraftToDiscordBuffer>>,
 }
 
 impl io::Read for GroupAudioSource {
     fn read(&mut self, mut buf: &mut [u8]) -> io::Result<usize> {
         use tracing::info;
         let mut all_samples = Vec::new();
-        let mut total_buffered = 0;
+        let mut _total_buffered = 0;
         for entry in self.mc_to_discord_buffers.iter() {
             let buffer_rx = &entry.value().pcm_buffer_rx;
             let buffered = buffer_rx.len();
-            total_buffered += buffered;
+            _total_buffered += buffered;
             info!(group=?entry.key(), "PCM buffer occupancy: {} packets", buffered);
             if let Ok(samples) = buffer_rx.try_recv() {
                 info!(group=?entry.key(), "Read {} samples from group buffer", samples.len());
                 all_samples.push(samples);
             }
         }
-        info!("Total PCM packets buffered across all groups: {}", total_buffered);
+        //info!("Total PCM packets buffered across all groups: {}", _total_buffered);
         let combined = crate::audio_util::combine_audio_parts(all_samples);
 
         let mut written = 0;

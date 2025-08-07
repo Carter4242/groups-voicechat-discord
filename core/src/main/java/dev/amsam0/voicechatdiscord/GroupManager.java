@@ -21,8 +21,8 @@ public final class GroupManager {
     // Tracks the first group created on the server
     public static UUID firstGroupId = null;
 
-    // Map: groupId -> (player UUID -> StaticAudioChannel)
-    public static final Map<UUID, Map<UUID, de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>> groupAudioChannels = new HashMap<>();
+    // Map: groupId -> (player UUID -> List<StaticAudioChannel>)
+    public static final Map<UUID, Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>>> groupAudioChannels = new HashMap<>();
 
     private static List<ServerPlayer> getPlayers(Group group) {
         List<ServerPlayer> players = groupPlayers.putIfAbsent(group.getId(), new ArrayList<>());
@@ -34,13 +34,16 @@ public final class GroupManager {
         if (firstGroupId != null && firstGroupId.equals(group.getId())) {
             platform.info("[createStaticAudioChannelIfFirstGroup] Attempting to create StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId());
             var level = player.getServerLevel();
-            var channelId = group.getId();
-            var staticChannel = api.createStaticAudioChannel(channelId, level, connection);
+            var randomChannelId = java.util.UUID.randomUUID();
+            var staticChannel = api.createStaticAudioChannel(randomChannelId, level, connection);
             if (staticChannel != null) {
-                groupAudioChannels.computeIfAbsent(channelId, k -> new HashMap<>()).put(player.getUuid(), staticChannel);
-                platform.info("Created StaticAudioChannel for player " + player.getUuid() + " in group " + channelId);
+                groupAudioChannels
+                    .computeIfAbsent(group.getId(), k -> new HashMap<>())
+                    .computeIfAbsent(player.getUuid(), k -> new ArrayList<>())
+                    .add(staticChannel);
+                platform.info("Created StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId() + " (channelId=" + randomChannelId + ")");
             } else {
-                platform.error("Failed to create StaticAudioChannel for player " + player.getUuid() + " in group " + channelId);
+                platform.error("Failed to create StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId() + " (channelId=" + randomChannelId + ")");
             }
         } else {
             platform.info("[createStaticAudioChannelIfFirstGroup] Not first group or firstGroupId not set, skipping StaticAudioChannel creation.");
@@ -78,10 +81,10 @@ public final class GroupManager {
                     platform.info(player.getUuid() + " (" + platform.getName(player) + ") left " + playerGroup + " (" + api.getGroup(playerGroup).getName() + ")");
                     playerList.remove(player);
                     // Remove StaticAudioChannel for this player if present
-                    Map<UUID, de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel> channels = groupAudioChannels.get(playerGroup);
+                    Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>> channels = groupAudioChannels.get(playerGroup);
                     if (channels != null) {
                         var removed = channels.remove(player.getUuid());
-                        if (removed != null) platform.info("Removed StaticAudioChannel for player " + player.getUuid() + " in group " + playerGroup);
+                        if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + player.getUuid() + " in group " + playerGroup);
                     }
                     return;
                 }
@@ -97,10 +100,10 @@ public final class GroupManager {
         // If this is the first group, remove player from DiscordBot
         if (firstGroupId != null && firstGroupId.equals(group.getId())) {
             // Remove StaticAudioChannel for this player if present
-            Map<UUID, de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel> channels = groupAudioChannels.get(group.getId());
+            Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>> channels = groupAudioChannels.get(group.getId());
             if (channels != null) {
                 var removed = channels.remove(player.getUuid());
-                if (removed != null) platform.info("Removed StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId());
+                if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + player.getUuid() + " in group " + group.getId());
             }
         }
     }

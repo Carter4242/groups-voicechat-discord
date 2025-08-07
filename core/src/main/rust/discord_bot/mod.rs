@@ -30,10 +30,14 @@ mod jni;
 mod log_in;
 mod start;
 
-struct GroupAudioBuffer {
+struct DiscordToMinecraftBuffer {
+    received_audio_tx: flume::Sender<Vec<Vec<u8>>>,
+    received_audio_rx: flume::Receiver<Vec<Vec<u8>>>,
+}
+
+struct MinecraftToDiscordBuffer {
     pcm_buffer_tx: flume::Sender<RawAudio>,
     pcm_buffer_rx: flume::Receiver<RawAudio>,
-    opus_buffer_tx: flume::Sender<Vec<u8>>,
 }
 
 struct DiscordBot {
@@ -41,13 +45,11 @@ struct DiscordBot {
     pub vc_id: ChannelId,
     songbird: Arc<Songbird>,
     state: RwLock<State>,
-    received_audio_tx: flume::Sender<Vec<u8>>,
-    received_audio_rx: flume::Receiver<Vec<u8>>,
     client_task: Mutex<Option<AbortHandle>>,
-    /// Buffers for Discord -> Minecraft audio (Opus data per group)
-    discord_to_mc_buffers: Arc<DashMap<Uuid, GroupAudioBuffer>>,
+    /// Buffer for Discord -> Minecraft audio (Opus data, single group)
+    discord_to_mc_buffer: DiscordToMinecraftBuffer,
     /// Buffers for Minecraft -> Discord audio (PCM data per group)
-    mc_to_discord_buffers: Arc<DashMap<Uuid, GroupAudioBuffer>>,
+    mc_to_discord_buffers: Arc<DashMap<Uuid, MinecraftToDiscordBuffer>>,
     opus_decoder: parking_lot::Mutex<songbird::driver::opus::coder::Decoder>,
 }
 
@@ -64,28 +66,25 @@ enum State {
 }
 
 impl DiscordBot {
-    /// Returns true if bot is in Started state
-    pub fn is_audio_active(&self) -> bool {
-        if let Some(lock) = self.state.try_read() {
-            matches!(*lock, State::Started { .. })
-        } else {
-            false
-        }
-    }
     pub fn new(token: String, vc_id: ChannelId) -> DiscordBot {
         let (received_audio_tx, received_audio_rx) = flume::bounded(MAX_AUDIO_BUFFER);
         DiscordBot {
             token,
             vc_id,
             songbird: {
-                let songbird_config = Config::default().decode_mode(DecodeMode::Decrypt);
+                use std::num::NonZeroUsize;
+                let songbird_config = Config::default()
+                    .decode_mode(DecodeMode::Decrypt)
+                    .playout_buffer_length(NonZeroUsize::new(8).unwrap()) // 5 packets = 100ms
+                    .playout_spike_length(3); // 3 extra packets for bursts
                 Songbird::serenity_from_config(songbird_config)
             },
             state: RwLock::new(State::NotLoggedIn),
-            received_audio_tx,
-            received_audio_rx,
             client_task: Mutex::new(None),
-            discord_to_mc_buffers: Arc::new(DashMap::new()),
+            discord_to_mc_buffer: DiscordToMinecraftBuffer {
+                received_audio_tx,
+                received_audio_rx,
+            },
             mc_to_discord_buffers: Arc::new(DashMap::new()),
             opus_decoder: parking_lot::Mutex::new(
                 songbird::driver::opus::coder::Decoder::new(
@@ -96,42 +95,7 @@ impl DiscordBot {
         }
     }
 
-    /// Route Discord Opus payload to all group buffers (for Minecraft transmission)
-    pub fn decode_and_route_to_groups(&self, opus_payload: &[u8]) {
-        for entry in self.discord_to_mc_buffers.iter() {
-            let group_id = *entry.key();
-            let buffer = entry.value();
-            let opus_buffer_occupancy = buffer.opus_buffer_tx.len();
-            tracing::info!("[Discord->Minecraft] Opus buffer occupancy for group_id={}: {} packets", group_id, opus_buffer_occupancy);
-            self.add_opus_to_minecraft_buffer(group_id, opus_payload);
-        }
-    }
 
-    /// Add Opus data to Minecraft buffer (for transmission)
-    pub fn add_opus_to_minecraft_buffer(&self, group_id: Uuid, opus_payload: &[u8]) {
-        tracing::info!(
-            "add_opus_to_minecraft_buffer called for group_id={} payload_len={}",
-            group_id,
-            opus_payload.len()
-        );
-        let buffer = self.discord_to_mc_buffers.entry(group_id)
-            .or_insert_with(|| {
-                tracing::info!("Creating new Discord->Minecraft GroupAudioBuffer for group_id={}", group_id);
-                let (pcm_tx, pcm_rx) = flume::bounded(MAX_AUDIO_BUFFER);
-                let (opus_tx, _) = flume::bounded(MAX_AUDIO_BUFFER);
-                GroupAudioBuffer {
-                    pcm_buffer_tx: pcm_tx,
-                    pcm_buffer_rx: pcm_rx,
-                    opus_buffer_tx: opus_tx,
-                }
-            });
-        if buffer.opus_buffer_tx.is_full() {
-            tracing::warn!("Group Opus audio buffer is full for group_id={}", group_id);
-            return;
-        }
-        let _ = buffer.opus_buffer_tx.send(opus_payload.to_vec());
-        tracing::info!("Opus audio added to buffer for group_id={}", group_id);
-    }
 
     #[tracing::instrument(skip(self), fields(self.vc_id = %self.vc_id))]
     fn disconnect(&self, guild_id: GuildId) {
@@ -166,8 +130,8 @@ impl DiscordBot {
         Ok(())
     }
 
-    pub fn block_for_speaking_opus_data(&self) -> Result<Vec<u8>, Report> {
-        match self.received_audio_rx.recv_timeout(Duration::from_secs(1)) {
+    pub fn block_for_speaking_opus_data(&self) -> Result<Vec<Vec<u8>>, Report> {
+        match self.discord_to_mc_buffer.received_audio_rx.recv_timeout(Duration::from_millis(50)) {
             Ok(data) => Ok(data),
             Err(flume::RecvTimeoutError::Timeout) => {
                 Err(eyre::eyre!("no one is speaking (timeout waiting for audio)"))
@@ -200,24 +164,21 @@ impl DiscordBot {
         match decoder.decode(Some(packet), output, false) {
             Ok(_) => {
                 let len = audio.len();
-                // Log first 10 samples of decoded PCM before sending to buffer
                 match audio.try_into() {
                     Ok(pcm) => {
                         let buffer = self.mc_to_discord_buffers.entry(group_id)
                             .or_insert_with(|| {
-                                tracing::info!("Creating new Minecraft->Discord GroupAudioBuffer for group_id={}", group_id);
+                                tracing::info!("Creating new MinecraftToDiscordBuffer for group_id={}", group_id);
                                 let (pcm_tx, pcm_rx) = flume::bounded(MAX_AUDIO_BUFFER);
-                                let (opus_tx, _) = flume::bounded(MAX_AUDIO_BUFFER);
-                                GroupAudioBuffer {
+                                MinecraftToDiscordBuffer {
                                     pcm_buffer_tx: pcm_tx,
                                     pcm_buffer_rx: pcm_rx,
-                                    opus_buffer_tx: opus_tx,
                                 }
                             });
                         let _pcm_buffer_occupancy = buffer.pcm_buffer_tx.len();
                         //tracing::info!("[Minecraft->Discord] PCM buffer occupancy for group_id={}: {} packets", group_id, _pcm_buffer_occupancy);
                         if buffer.pcm_buffer_tx.is_full() {
-                            tracing::warn!("Group PCM buffer is full for group_id={}", group_id);
+                            tracing::warn!("MinecraftToDiscordBuffer is full for group_id={}", group_id);
                             return;
                         }
                         let _ = buffer.pcm_buffer_tx.send(pcm);

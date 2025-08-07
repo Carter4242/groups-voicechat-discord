@@ -4,7 +4,6 @@ import de.maxhenkel.voicechat.api.ServerPlayer;
 import de.maxhenkel.voicechat.api.Group;
 import de.maxhenkel.voicechat.api.packets.StaticSoundPacket;
 
-import java.util.Map;
 import java.util.UUID;
 
 import static dev.amsam0.voicechatdiscord.Core.api;
@@ -22,24 +21,60 @@ public final class DiscordBot {
     private final long ptr;
 
     /**
-     * Send Discord Opus audio to all group members in the first group.
-     * @param opusData Opus encoded audio data from Discord
+     * Send a list of Discord Opus audio packets to all group members in the first group.
+     * @param opusPackets List of Opus encoded audio packets from Discord
      */
-    public void sendDiscordAudioToGroup(byte[] opusData) {
+    public void sendDiscordAudioToGroup(byte[][] opusPackets) {
         UUID groupId = dev.amsam0.voicechatdiscord.GroupManager.firstGroupId;
         if (groupId == null) {
             platform.warn("No group to send Discord audio to");
             return;
         }
-        Map<UUID, de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel> channels = dev.amsam0.voicechatdiscord.GroupManager.groupAudioChannels.get(groupId);
-        if (channels == null || channels.isEmpty()) {
+        var groupChannels = dev.amsam0.voicechatdiscord.GroupManager.groupAudioChannels.get(groupId);
+        if (groupChannels == null || groupChannels.isEmpty()) {
             platform.warn("No group audio channels to send Discord audio to");
             return;
         }
-        for (var entry : channels.entrySet()) {
-            var channel = entry.getValue();
-            if (channel != null && !channel.isClosed()) {
-                channel.send(opusData);
+        platform.info("Sending " + opusPackets.length + " Discord audio packets to each group member's channel list");
+        for (var entry : groupChannels.entrySet()) {
+            UUID playerId = entry.getKey();
+            var channelList = entry.getValue();
+            if (channelList == null) {
+                channelList = new java.util.ArrayList<>();
+                groupChannels.put(playerId, channelList);
+            }
+
+            for (int i = 0; i < opusPackets.length; i++) {
+                if (i >= channelList.size() || channelList.get(i) == null || channelList.get(i).isClosed()) {
+                    // Only fetch these if we need to create a new channel
+                    var connection = dev.amsam0.voicechatdiscord.Core.api.getConnectionOf(playerId);
+                    var player = connection != null ? connection.getPlayer() : null;
+                    var group = dev.amsam0.voicechatdiscord.Core.api.getGroup(groupId);
+                    var level = player != null ? player.getServerLevel() : null;
+                    if (group != null && level != null && connection != null) {
+                        // Use a random UUID for the channelId instead of groupId
+                        var randomChannelId = java.util.UUID.randomUUID();
+                        var newChannel = dev.amsam0.voicechatdiscord.Core.api.createStaticAudioChannel(randomChannelId, level, connection);
+                        if (newChannel != null) {
+                            if (i < channelList.size()) {
+                                channelList.set(i, newChannel);
+                            } else {
+                                channelList.add(newChannel);
+                            }
+                            platform.info("Created new StaticAudioChannel for player " + playerId + " in group " + groupId + " for packet index " + i);
+                        } else {
+                            platform.error("Failed to create StaticAudioChannel for player " + playerId + " in group " + groupId + " for packet index " + i);
+                        }
+                    } else {
+                        platform.error("Cannot create StaticAudioChannel: missing group, level, or connection for player " + playerId);
+                        continue;
+                    }
+                }
+                var channel = channelList.get(i);
+                byte[] opusData = opusPackets[i];
+                if (channel != null && !channel.isClosed() && opusData != null && opusData.length > 0) {
+                    channel.send(opusData);
+                }
             }
         }
     }
@@ -95,14 +130,27 @@ public final class DiscordBot {
         }
         running = true;
         discordAudioThread = new Thread(() -> {
+            long lastPacketTime = -1;
             while (running && !freed) {
                 try {
                     if (freed) break;
-                    byte[] opusData = _blockForSpeakingBufferOpusData(ptr);
+                    Object result = _blockForSpeakingBufferOpusData(ptr);
                     if (freed) break;
 
-                    if (opusData != null && opusData.length > 0) {
-                        sendDiscordAudioToGroup(opusData);
+                    if (result instanceof byte[][] packets) {
+                        long now = System.currentTimeMillis();
+                        if (packets.length > 0) {
+                            if (lastPacketTime != -1) {
+                                long delta = now - lastPacketTime;
+                                platform.info(delta + " ms since last Discord audio packet for vc_id=" + vcId);
+                            }
+                            lastPacketTime = now;
+                            sendDiscordAudioToGroup(packets);
+                        } else {
+                            platform.info("No Discord audio available for vc_id=" + vcId);
+                        }
+                    } else {
+                        platform.warn("Unexpected return type from _blockForSpeakingBufferOpusData: " + (result == null ? "null" : result.getClass()));
                     }
                 } catch (Throwable t) {
                     platform.error("Error in Discord audio thread for bot vc_id=" + vcId, t);
@@ -211,7 +259,6 @@ public final class DiscordBot {
         }
         byte[] groupIdBytes = uuidToBytes(groupId);
         byte[] opusData = packet.getOpusEncodedData();
-        platform.info("[handlePacket] opusData length=" + (opusData != null ? opusData.length : -1));
         _addAudioToHearingBuffer(ptr, groupIdBytes, opusData);
     }
 
@@ -227,7 +274,7 @@ public final class DiscordBot {
         return bytes;
     }
 
-    private native byte[] _blockForSpeakingBufferOpusData(long ptr);
+    private native Object _blockForSpeakingBufferOpusData(long ptr);
 
     private native void _resetSenders(long ptr);
 }

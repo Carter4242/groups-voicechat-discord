@@ -5,7 +5,6 @@ use jni::{
 };
 use serenity::all::ChannelId;
 use std::sync::Arc;
-use tracing::info;
 
 use crate::discord_bot::State;
 use crate::ResultExt;
@@ -172,50 +171,58 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
     let _ = Arc::into_raw(discord_bot);
 }
 
+
 #[no_mangle]
 pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpeakingBufferOpusData(
-    env: JNIEnv<'_>,
+    mut env: JNIEnv<'_>,
     _obj: jobject,
     ptr: jlong,
-) -> JByteArray<'_> {
-    // Defensive: check for null pointer
+) -> jobject {
+    use jni::objects::JObject;
+
     if ptr == 0 {
         tracing::error!("JNI blockForSpeakingBufferOpusData called with null pointer");
-        return env
-            .byte_array_from_slice(&[])
-            .expect("Couldn't create byte array from slice. Please file a GitHub issue");
+        // Return an empty Java array of byte arrays
+        let empty = env.new_byte_array(0).expect("Couldn't create empty byte array");
+        let byte_array_class = env.find_class("[B").unwrap();
+        let arr = env.new_object_array(0, byte_array_class, empty).unwrap();
+        return arr.into_raw();
     }
 
-    let result = std::panic::catch_unwind(|| {
+    // Only catch panics around the Rust logic, not JNI calls
+    let rust_result = std::panic::catch_unwind(|| {
         let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
-        // This is Discord -> Minecraft, so use discord_to_mc_buffers
-        let opus_data = match discord_bot.block_for_speaking_opus_data() {
-            Ok(d) => d,
-            Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("audio channel closed") {
-                    info!(
-                        "Failed to get speaking opus data for bot with vc_id {}: {e:#}",
-                        discord_bot.vc_id
-                    );
-                }
-                let _ = Arc::into_raw(discord_bot);
-                return env
-                    .byte_array_from_slice(&[])
-                    .expect("Couldn't create byte array from slice. Please file a GitHub issue");
-            }
-        };
-        let result = env.byte_array_from_slice(&opus_data)
-            .expect("Couldn't create byte array from slice. Please file a GitHub issue");
+        let opus_packets = discord_bot.block_for_speaking_opus_data();
         let _ = Arc::into_raw(discord_bot);
-        result
+        opus_packets
     });
-    match result {
-        Ok(arr) => arr,
+
+    match rust_result {
+        Ok(Ok(opus_packets)) => {
+            tracing::info!("JNI: Got Discord audio ({} packets) for vc_id={}", opus_packets.len(), ptr);
+            let byte_array_class = env.find_class("[B").unwrap();
+            let empty = env.new_byte_array(0).unwrap();
+            let arr = env.new_object_array(opus_packets.len() as i32, byte_array_class, empty).unwrap();
+            for (i, packet) in opus_packets.iter().enumerate() {
+                let jpacket = env.byte_array_from_slice(packet).expect("Couldn't create byte array from slice");
+                env.set_object_array_element(&arr, i as i32, JObject::from(jpacket)).expect("Couldn't set array element");
+            }
+            arr.into_raw()
+        },
+        Ok(Err(e)) => {
+            let msg = format!("{e}");
+            tracing::warn!("Failed to get speaking opus data for bot with ptr {}: {}", ptr, msg);
+            let byte_array_class = env.find_class("[B").unwrap();
+            let empty = env.new_byte_array(0).unwrap();
+            let arr = env.new_object_array(0, byte_array_class, empty).unwrap();
+            arr.into_raw()
+        },
         Err(_) => {
             tracing::error!("Panic in blockForSpeakingBufferOpusData for ptr: {:#x}", ptr);
-            env.byte_array_from_slice(&[])
-                .expect("Couldn't create byte array from slice. Please file a GitHub issue")
+            let byte_array_class = env.find_class("[B").unwrap();
+            let empty = env.new_byte_array(0).unwrap();
+            let arr = env.new_object_array(0, byte_array_class, empty).unwrap();
+            arr.into_raw()
         }
     }
 }
