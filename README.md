@@ -1,8 +1,9 @@
 > ℹ️ **Note**
 >
-> As explained in the [Project Status Update](https://github.com/amsam0/voicechat-discord/issues/12), this project is now in **Maintenance Mode**. This means that I currently do not plan to
-> implement any more features into the addon (PRs are welcome though!). I will try my best to make bug fixes and support the latest Minecraft versions, but I cannot guarantee these fixes will be made
-> in a timely manner, if they are made at all.
+> This project is in **Maintenance Mode**. This means that I currently do not plan to
+> implement any more features into the addon (PRs are welcome though!). I will try my
+> best to make bug fixes and support the latest Minecraft versions, but I cannot guarantee
+> these fixes will be made in a timely manner, if they are made at all.
 
 # Simple Voice Chat Discord Bridge
 
