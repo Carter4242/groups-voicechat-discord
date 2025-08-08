@@ -19,7 +19,6 @@ use tokio::task::AbortHandle;
 use tracing::{info, warn};
 
 use crate::audio_util::MAX_AUDIO_BUFFER;
-use crate::audio_util::RAW_AUDIO_SIZE;
 use crate::runtime::RUNTIME;
 
 mod discord_receive;
@@ -53,7 +52,6 @@ struct DiscordBot {
     discord_to_mc_buffer: DiscordToMinecraftBuffer,
     /// Buffers for Minecraft -> Discord audio (PCM data per player)
     player_to_discord_buffers: Arc<DashMap<Uuid, PlayerToDiscordBuffer>>,
-    opus_decoder: parking_lot::Mutex<songbird::driver::opus::coder::Decoder>,
 }
 
 enum State {
@@ -89,12 +87,6 @@ impl DiscordBot {
                 received_audio_rx,
             },
             player_to_discord_buffers: Arc::new(DashMap::new()),
-            opus_decoder: parking_lot::Mutex::new(
-                songbird::driver::opus::coder::Decoder::new(
-                    crate::audio_util::OPUS_SAMPLE_RATE,
-                    crate::audio_util::OPUS_CHANNELS,
-                ).expect("Unable to create Opus decoder")
-            ),
         }
     }
 
@@ -145,15 +137,15 @@ impl DiscordBot {
         }
     }
 
-    /// Decode Opus payload and send PCM to the player buffer, using the provided sequence number
-    pub fn add_pcm_to_playback_buffer(&self, player_id: Uuid, payload: Vec<u8>, seq: u16) {
+    /// Store Opus payload in the player buffer, using the provided sequence number
+    pub fn add_opus_to_playback_buffer(&self, player_id: Uuid, payload: Vec<u8>, seq: u16) {
         // Special handling for zero-length packets: treat as end-of-speech marker
         if payload.is_empty() {
             let buffer = self.player_to_discord_buffers.entry(player_id)
                 .or_insert_with(|| {
                     tracing::info!("Creating new PlayerToDiscordBuffer for player_id={}", player_id);
                     PlayerToDiscordBuffer {
-                        playout_buffer: StdMutex::new(PlayoutBuffer::new(8, 0)),
+                        playout_buffer: StdMutex::new(PlayoutBuffer::new(8, seq)),
                     }
                 });
             let mut playout = buffer.playout_buffer.lock().unwrap();
@@ -161,47 +153,16 @@ impl DiscordBot {
             tracing::info!("Received zero-length packet for player_id={}: forcing playout buffer to drain mode", player_id);
             return;
         }
-        // Decode Opus to PCM (RawAudio)
-        let mut audio = vec![0i16; RAW_AUDIO_SIZE];
-        let mut decoder = self.opus_decoder.lock();
-        let packet = match (&payload).try_into() {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!("Invalid opus data for player_id={}: {:?}", player_id, e);
-                return;
-            }
-        };
-        let output = match (&mut audio).try_into() {
-            Ok(o) => o,
-            Err(e) => {
-                tracing::error!("Unable to wrap output for player_id={}: {:?}", player_id, e);
-                return;
-            }
-        };
-        match decoder.decode(Some(packet), output, false) {
-            Ok(_) => {
-                match audio.try_into() {
-                    Ok(pcm) => {
-                        let buffer = self.player_to_discord_buffers.entry(player_id)
-                            .or_insert_with(|| {
-                                tracing::info!("Creating new PlayerToDiscordBuffer for player_id={}", player_id);
-                                PlayerToDiscordBuffer {
-                                    playout_buffer: StdMutex::new(PlayoutBuffer::new(8, 0)),
-                                }
-                            });
-                        let mut playout = buffer.playout_buffer.lock().unwrap();
-                        let stored = StoredPacket { pcm, decrypted: true, seq };
-                        playout.store_packet(stored);
-                    }
-                    Err(_) => {
-                        tracing::error!("Decoded audio is not 960 samples for player_id={}", player_id);
-                    }
+        let buffer = self.player_to_discord_buffers.entry(player_id)
+            .or_insert_with(|| {
+                tracing::info!("Creating new PlayerToDiscordBuffer for player_id={}", player_id);
+                PlayerToDiscordBuffer {
+                    playout_buffer: StdMutex::new(PlayoutBuffer::new(8, seq)),
                 }
-            }
-            Err(e) => {
-                tracing::error!("Opus decode failed for player_id={}: {:?}", player_id, e);
-            }
-        }
+            });
+        let mut playout = buffer.playout_buffer.lock().unwrap();
+        let stored = StoredPacket { opus: payload, decrypted: true, seq };
+        playout.store_packet(stored);
     }
 }
 

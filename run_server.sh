@@ -57,61 +57,6 @@ if [ "$platform" == "paper" ]; then
   to="paper/run/$minecraftVersion/plugins/voicechat-discord-paper.jar"
   cp $from $to
   echo -e "${green}Copied plugin from $from to $to${clear}"
-
-elif [ "$platform" == "fabric" ]; then
-  echo -e "Setting up Fabric server on version $minecraftVersion"
-
-  mkdir -p "fabric/run/$minecraftVersion/config"
-  mkdir -p "fabric/run/$minecraftVersion/mods"
-
-  # Get server jar
-  file="fabric/run/$minecraftVersion/server.jar"
-  if [ ! -f $file ]; then
-    url="https://meta.fabricmc.net/v2/versions/loader/$minecraftVersion/$fabricLoaderVersion/1.1.0/server/jar"
-
-    echo -e -n "${yellow}Downloading server jar from ${clear}$url${yellow}..."
-    curl -s -o $file $url
-    echo -e "downloaded${clear}"
-  else
-    echo -e "${green}Server jar already downloaded${clear}"
-  fi
-
-  # Download fabric API
-  file="fabric/run/$minecraftVersion/mods/fabric-api.jar"
-  if [ ! -f $file ]; then
-    url=$(curl -g -s "https://api.modrinth.com/v2/project/P7dR8mSH/version?game_versions=[%22$minecraftVersion%22]" | jq -r '.[0].files[0].url')
-
-    echo -e -n "${yellow}Downloading Fabric API from ${clear}$url${yellow}..."
-    curl -s -o $file $url
-    echo -e "downloaded${clear}"
-  else
-    echo -e "${green}Fabric API already downloaded${clear}"
-  fi
-
-  # Download voicechat
-  file="fabric/run/$minecraftVersion/mods/voicechat-fabric.jar"
-  if [ ! -f $file ]; then
-    url=$(curl -g -s "https://api.modrinth.com/v2/project/9eGKb6K1/version?game_versions=[%22$minecraftVersion%22]&loaders=[%22fabric%22]" | jq -r '.[0].files[0].url')
-
-    echo -e -n "${yellow}Downloading voicechat from ${clear}$url${yellow}..."
-    curl -s -o $file $url
-    echo -e "downloaded${clear}"
-  else
-    echo -e "${green}voicechat already downloaded${clear}"
-  fi
-
-  # Copy config
-  from="config.yml"
-  to="fabric/run/$minecraftVersion/config/voicechat-discord.yml"
-  cp $from $to
-  echo -e "${green}Copied config from $from to $to${clear}"
-
-  # Copy mod
-  from="fabric/build/libs/voicechat-discord-fabric-$pluginVersion.jar"
-  to="fabric/run/$minecraftVersion/mods/voicechat-discord-fabric.jar"
-  cp $from $to
-  echo -e "${green}Copied mod $from to $to${clear}"
-
 else
   echo -e "${red}Unknown platform $platform${clear}"
   exit 1
@@ -119,4 +64,4 @@ fi
 
 echo -e "${green}Running version $minecraftVersion on platform $platform${clear}"
 cd "$platform/run/$minecraftVersion"
-java -Xmx1G -jar server.jar --nogui
+java -Xms4G -Xmx4G -jar server.jar --nogui

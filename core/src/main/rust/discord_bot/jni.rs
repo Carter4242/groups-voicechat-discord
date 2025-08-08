@@ -165,7 +165,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
 
     // This is Minecraft -> Discord, so use player_to_discord_buffers
     let seq = sequence_number as u16;
-    discord_bot.add_pcm_to_playback_buffer(player_id, raw_opus_data, seq);
+    discord_bot.add_opus_to_playback_buffer(player_id, raw_opus_data, seq);
 
     let _ = Arc::into_raw(discord_bot);
 }

@@ -11,11 +11,10 @@
 
 
 use std::collections::VecDeque;
-use crate::audio_util::RawAudio;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredPacket {
-    pub pcm: RawAudio,
+    pub opus: Vec<u8>,
     pub decrypted: bool,
     pub seq: u16, // Add sequence number
 }
@@ -84,18 +83,34 @@ impl PlayoutBuffer {
             // Too old, drop
             return;
         }
+
         let desired_index = seq_diff as usize;
         // Error threshold for too-far-ahead packets
-        let err_threshold = 32;
-        if desired_index > 64 {
+        let err_threshold = 8;
+        if desired_index > 16 {
             // Too far ahead, increment store fails
             self.consecutive_store_fails += 1;
             // If too many consecutive store fails, treat as desync and reset buffer
             if self.consecutive_store_fails >= err_threshold {
+                let old_seq = self.next_seq;
+                tracing::warn!(
+                    old_seq,
+                    new_seq = pkt_seq,
+                    fails = self.consecutive_store_fails,
+                    threshold = err_threshold,
+                    "store_packet: too many out-of-range packets (>{}), resetting buffer from old_seq={} to new_seq={} ({} fails)",
+                    err_threshold, old_seq, pkt_seq, self.consecutive_store_fails
+                );
                 self.reset_buffer(pkt_seq, packet);
             }
             return;
         }
+
+        // If buffer is at or above capacity, drop the packet and log
+        if self.buffer.len() >= self.capacity {
+            tracing::warn!(seq = pkt_seq, capacity = self.capacity, buf_size = self.buffer.len(), "store_packet: buffer full");
+        }
+        
         while self.buffer.len() <= desired_index {
             self.buffer.push_back(None);
         }
@@ -108,21 +123,26 @@ impl PlayoutBuffer {
 
     pub fn fetch_packet(&mut self) -> PacketLookup {
         if self.playout_mode == PlayoutMode::Fill {
+            tracing::info!(buf_size = self.buffer.len(), "fetch_packet: returning Filling (in Fill mode)");
             return PacketLookup::Filling;
         }
         let out = match self.buffer.pop_front() {
             Some(Some(pkt)) => {
-                tracing::info!(seq = pkt.seq, "fetch_packet: returning packet with seq");
+                if self.buffer.len() >= 10 {
+                    tracing::warn!(seq = pkt.seq, buf_size = self.buffer.len(), "fetch_packet: returning packet with seq");
+                } else {
+                    tracing::info!(seq = pkt.seq, buf_size = self.buffer.len(), "fetch_packet: returning packet with seq");
+                }
                 self.next_seq = self.next_seq.wrapping_add(1);
                 PacketLookup::Packet(pkt)
             },
             Some(None) => {
-                tracing::info!(seq = self.next_seq, "fetch_packet: missed packet with seq");
+                tracing::info!(seq = self.next_seq, buf_size = self.buffer.len(), "fetch_packet: missed packet with seq");
                 self.next_seq = self.next_seq.wrapping_add(1);
                 PacketLookup::MissedPacket
             },
             None => {
-                tracing::info!(next_seq = self.next_seq, "fetch_packet: buffer empty, entering Fill mode");
+                tracing::info!(next_seq = self.next_seq, buf_size = self.buffer.len(), "fetch_packet: buffer empty, entering Fill mode");
                 PacketLookup::Filling
             },
         };
