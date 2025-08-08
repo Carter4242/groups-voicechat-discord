@@ -116,25 +116,23 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
     env: JNIEnv<'local>,
     _obj: jobject,
     ptr: jlong,
-    group_id_bytes: JByteArray<'local>,
+    player_id_bytes: JByteArray<'local>,
     raw_opus_data: JByteArray<'local>,
+    sequence_number: jlong,
 ) {
-
     let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
 
-    let group_id = match env.convert_byte_array(group_id_bytes) {
+    let player_id = match env.convert_byte_array(player_id_bytes) {
         Ok(bytes) => match uuid::Uuid::from_slice(&bytes) {
-            Ok(uuid) => {
-                uuid
-            }
+            Ok(uuid) => uuid,
             Err(e) => {
-                tracing::error!("Invalid group_id bytes: {:?}", e);
+                tracing::error!("Invalid player_id bytes: {:?}", e);
                 let _ = Arc::into_raw(discord_bot);
                 return;
             }
         },
         Err(e) => {
-            tracing::error!("Unable to convert group_id bytes: {:?}", e);
+            tracing::error!("Unable to convert player_id bytes: {:?}", e);
             let _ = Arc::into_raw(discord_bot);
             return;
         }
@@ -154,7 +152,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
                     timestamps.remove(0);
                 }
                 let rate = timestamps.len() as f64 * 2.0;
-                tracing::info!("Adding new packet to group_id: {} (length: {}) | [PacketRate] {:.1} packets/sec (rolling 0.5s window)", group_id, data.len(), rate);
+                tracing::info!("Adding new packet to player_id: {} (length: {}) | [PacketRate] {:.1} packets/sec (rolling 0.5s window)", player_id, data.len(), rate);
             }
             data
         }
@@ -165,8 +163,9 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
         }
     };
 
-    // This is Minecraft -> Discord, so use mc_to_discord_buffers
-    discord_bot.add_pcm_to_playback_buffer(group_id, raw_opus_data);
+    // This is Minecraft -> Discord, so use player_to_discord_buffers
+    let seq = sequence_number as u16;
+    discord_bot.add_pcm_to_playback_buffer(player_id, raw_opus_data, seq);
 
     let _ = Arc::into_raw(discord_bot);
 }
@@ -209,9 +208,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
             }
             arr.into_raw()
         },
-        Ok(Err(e)) => {
-            let msg = format!("{e}");
-            tracing::warn!("Failed to get speaking opus data for bot with ptr {}: {}", ptr, msg);
+        Ok(Err(_)) => {
             let byte_array_class = env.find_class("[B").unwrap();
             let empty = env.new_byte_array(0).unwrap();
             let arr = env.new_object_array(0, byte_array_class, empty).unwrap();

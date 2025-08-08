@@ -79,40 +79,6 @@ public final class DiscordBot {
         }
     }
 
-    /**
-     * Handles a MicrophonePacketEvent for bridging Minecraft group audio to Discord (including solo group members).
-     */
-    public static void handleGroupMicrophonePacketEvent(de.maxhenkel.voicechat.api.events.MicrophonePacketEvent event) {
-        try {
-            var senderConn = event.getSenderConnection();
-            if (senderConn == null) {
-                platform.info("[handleGroupMicrophonePacketEvent] No sender connection, ignoring.");
-                return;
-            }
-            var group = senderConn.getGroup();
-            if (group == null) {
-                return;
-            }
-            var sender = senderConn.getPlayer();
-            if (sender == null) {
-                platform.info("[handleGroupMicrophonePacketEvent] No sender player, ignoring.");
-                return;
-            }
-            if (Core.bots.isEmpty()) {
-                platform.warn("[handleGroupMicrophonePacketEvent] No bots available!");
-                return;
-            }
-            var packet = event.getPacket();
-            if (!(packet instanceof de.maxhenkel.voicechat.api.packets.ConvertablePacket convertable)) {
-                platform.warn("[handleGroupMicrophonePacketEvent] Packet is not convertable to StaticSoundPacket!");
-                return;
-            }
-            Core.bots.get(0).handlePacket(convertable.staticSoundPacketBuilder().build(), sender);
-        } catch (Throwable t) {
-            platform.error("[handleGroupMicrophonePacketEvent] Exception occurred", t);
-        }
-    }
-
     private static native long _new(String token, long vcId);
 
     public DiscordBot(String token, long vcId) {
@@ -146,8 +112,6 @@ public final class DiscordBot {
                             }
                             lastPacketTime = now;
                             sendDiscordAudioToGroup(packets);
-                        } else {
-                            platform.info("No Discord audio available for vc_id=" + vcId);
                         }
                     } else {
                         platform.warn("Unexpected return type from _blockForSpeakingBufferOpusData: " + (result == null ? "null" : result.getClass()));
@@ -237,7 +201,41 @@ public final class DiscordBot {
         platform.info("DiscordBot.free finished for vc_id=" + vcId);
     }
 
-    private native void _addAudioToHearingBuffer(long ptr, byte[] groupIdBytes, byte[] rawOpusData);
+    private native void _addAudioToHearingBuffer(long ptr, byte[] groupIdBytes, byte[] rawOpusData, long sequenceNumber);
+
+    /**
+     * Handles a MicrophonePacketEvent for bridging Minecraft group audio to Discord (including solo group members).
+     */
+    public static void handleGroupMicrophonePacketEvent(de.maxhenkel.voicechat.api.events.MicrophonePacketEvent event) {
+        try {
+            var senderConn = event.getSenderConnection();
+            if (senderConn == null) {
+                platform.info("[handleGroupMicrophonePacketEvent] No sender connection, ignoring.");
+                return;
+            }
+            var group = senderConn.getGroup();
+            if (group == null) {
+                return;
+            }
+            var sender = senderConn.getPlayer();
+            if (sender == null) {
+                platform.info("[handleGroupMicrophonePacketEvent] No sender player, ignoring.");
+                return;
+            }
+            if (Core.bots.isEmpty()) {
+                platform.warn("[handleGroupMicrophonePacketEvent] No bots available!");
+                return;
+            }
+            var packet = event.getPacket();
+            if (!(packet instanceof de.maxhenkel.voicechat.api.packets.ConvertablePacket convertable)) {
+                platform.warn("[handleGroupMicrophonePacketEvent] Packet is not convertable to StaticSoundPacket!");
+                return;
+            }
+            Core.bots.get(0).handlePacket(convertable.staticSoundPacketBuilder().build(), sender);
+        } catch (Throwable t) {
+            platform.error("[handleGroupMicrophonePacketEvent] Exception occurred", t);
+        }
+    }
 
     /**
      * Receives a group audio packet from Minecraft and sends it to Discord.
@@ -247,19 +245,19 @@ public final class DiscordBot {
             platform.warn("handlePacket called after bot was freed");
             return;
         }
-        // Extract group ID from VoicechatConnection
-        Group group = null;
-        if (player != null && api.getConnectionOf(player) != null) {
-            group = api.getConnectionOf(player).getGroup();
-        }
-        UUID groupId = group != null ? group.getId() : null;
-        if (groupId == null) {
-            platform.warn("StaticSoundPacket missing groupId");
+        if (player == null) {
+            platform.warn("handlePacket called with null player");
             return;
         }
-        byte[] groupIdBytes = uuidToBytes(groupId);
+        UUID playerId = player.getUuid();
+        if (playerId == null) {
+            platform.warn("StaticSoundPacket missing playerId");
+            return;
+        }
+        byte[] playerIdBytes = uuidToBytes(playerId);
         byte[] opusData = packet.getOpusEncodedData();
-        _addAudioToHearingBuffer(ptr, groupIdBytes, opusData);
+        long sequenceNumber = packet.getSequenceNumber();
+        _addAudioToHearingBuffer(ptr, playerIdBytes, opusData, sequenceNumber);
     }
 
     /**
@@ -273,7 +271,7 @@ public final class DiscordBot {
         for (int i = 0; i < 8; i++) bytes[8 + i] = (byte) (lsb >>> (8 * (7 - i)));
         return bytes;
     }
-
+    
     private native Object _blockForSpeakingBufferOpusData(long ptr);
 
     private native void _resetSenders(long ptr);

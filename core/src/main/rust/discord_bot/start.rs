@@ -38,7 +38,7 @@ impl super::DiscordBot {
         let songbird = bot.songbird.clone();
         let vc_id = bot.vc_id;
         let guild_id = channel.guild_id;
-        let mc_to_discord_buffers = Arc::clone(&bot.mc_to_discord_buffers);
+        let player_to_discord_buffers = Arc::clone(&bot.player_to_discord_buffers);
         let bot_for_async = Arc::clone(&bot);
         {
             if let Err(e) = RUNTIME.block_on(async move {
@@ -67,7 +67,7 @@ impl super::DiscordBot {
                     },
                 );
 
-                call.play_only_input(create_playable_input(mc_to_discord_buffers)?);
+                call.play_only_input(create_playable_input(player_to_discord_buffers)?);
                 // TODO: track error handling
 
                 eyre::Ok(())

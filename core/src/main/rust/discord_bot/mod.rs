@@ -20,8 +20,6 @@ use tracing::{info, warn};
 
 use crate::audio_util::MAX_AUDIO_BUFFER;
 use crate::audio_util::RAW_AUDIO_SIZE;
-use crate::audio_util::RawAudio;
-use std::f32::consts::PI;
 use crate::runtime::RUNTIME;
 
 mod discord_receive;
@@ -35,9 +33,14 @@ struct DiscordToMinecraftBuffer {
     received_audio_rx: flume::Receiver<Vec<Vec<u8>>>,
 }
 
-struct MinecraftToDiscordBuffer {
-    pcm_buffer_tx: flume::Sender<RawAudio>,
-    pcm_buffer_rx: flume::Receiver<RawAudio>,
+
+// --- Jitter buffer integration ---
+mod playout_buffer;
+use playout_buffer::{PlayoutBuffer, StoredPacket};
+use std::sync::Mutex as StdMutex;
+
+pub struct PlayerToDiscordBuffer {
+    pub playout_buffer: StdMutex<PlayoutBuffer>,
 }
 
 struct DiscordBot {
@@ -48,8 +51,8 @@ struct DiscordBot {
     client_task: Mutex<Option<AbortHandle>>,
     /// Buffer for Discord -> Minecraft audio (Opus data, single group)
     discord_to_mc_buffer: DiscordToMinecraftBuffer,
-    /// Buffers for Minecraft -> Discord audio (PCM data per group)
-    mc_to_discord_buffers: Arc<DashMap<Uuid, MinecraftToDiscordBuffer>>,
+    /// Buffers for Minecraft -> Discord audio (PCM data per player)
+    player_to_discord_buffers: Arc<DashMap<Uuid, PlayerToDiscordBuffer>>,
     opus_decoder: parking_lot::Mutex<songbird::driver::opus::coder::Decoder>,
 }
 
@@ -85,7 +88,7 @@ impl DiscordBot {
                 received_audio_tx,
                 received_audio_rx,
             },
-            mc_to_discord_buffers: Arc::new(DashMap::new()),
+            player_to_discord_buffers: Arc::new(DashMap::new()),
             opus_decoder: parking_lot::Mutex::new(
                 songbird::driver::opus::coder::Decoder::new(
                     crate::audio_util::OPUS_SAMPLE_RATE,
@@ -142,75 +145,63 @@ impl DiscordBot {
         }
     }
 
-    /// Decode Opus payload and send PCM to the group buffer
-    pub fn add_pcm_to_playback_buffer(&self, group_id: Uuid, payload: Vec<u8>) {
+    /// Decode Opus payload and send PCM to the player buffer, using the provided sequence number
+    pub fn add_pcm_to_playback_buffer(&self, player_id: Uuid, payload: Vec<u8>, seq: u16) {
+        // Special handling for zero-length packets: treat as end-of-speech marker
+        if payload.is_empty() {
+            let buffer = self.player_to_discord_buffers.entry(player_id)
+                .or_insert_with(|| {
+                    tracing::info!("Creating new PlayerToDiscordBuffer for player_id={}", player_id);
+                    PlayerToDiscordBuffer {
+                        playout_buffer: StdMutex::new(PlayoutBuffer::new(8, 0)),
+                    }
+                });
+            let mut playout = buffer.playout_buffer.lock().unwrap();
+            playout.force_drain();
+            tracing::info!("Received zero-length packet for player_id={}: forcing playout buffer to drain mode", player_id);
+            return;
+        }
         // Decode Opus to PCM (RawAudio)
         let mut audio = vec![0i16; RAW_AUDIO_SIZE];
         let mut decoder = self.opus_decoder.lock();
         let packet = match (&payload).try_into() {
             Ok(p) => p,
             Err(e) => {
-                tracing::error!("Invalid opus data for group_id={}: {:?}", group_id, e);
+                tracing::error!("Invalid opus data for player_id={}: {:?}", player_id, e);
                 return;
             }
         };
         let output = match (&mut audio).try_into() {
             Ok(o) => o,
             Err(e) => {
-                tracing::error!("Unable to wrap output for group_id={}: {:?}", group_id, e);
+                tracing::error!("Unable to wrap output for player_id={}: {:?}", player_id, e);
                 return;
             }
         };
         match decoder.decode(Some(packet), output, false) {
             Ok(_) => {
-                let len = audio.len();
                 match audio.try_into() {
                     Ok(pcm) => {
-                        let buffer = self.mc_to_discord_buffers.entry(group_id)
+                        let buffer = self.player_to_discord_buffers.entry(player_id)
                             .or_insert_with(|| {
-                                tracing::info!("Creating new MinecraftToDiscordBuffer for group_id={}", group_id);
-                                let (pcm_tx, pcm_rx) = flume::bounded(MAX_AUDIO_BUFFER);
-                                MinecraftToDiscordBuffer {
-                                    pcm_buffer_tx: pcm_tx,
-                                    pcm_buffer_rx: pcm_rx,
+                                tracing::info!("Creating new PlayerToDiscordBuffer for player_id={}", player_id);
+                                PlayerToDiscordBuffer {
+                                    playout_buffer: StdMutex::new(PlayoutBuffer::new(8, 0)),
                                 }
                             });
-                        let _pcm_buffer_occupancy = buffer.pcm_buffer_tx.len();
-                        //tracing::info!("[Minecraft->Discord] PCM buffer occupancy for group_id={}: {} packets", group_id, _pcm_buffer_occupancy);
-                        if buffer.pcm_buffer_tx.is_full() {
-                            tracing::warn!("MinecraftToDiscordBuffer is full for group_id={}", group_id);
-                            return;
-                        }
-                        let _ = buffer.pcm_buffer_tx.send(pcm);
-
-                        // TEST: Inject a 440Hz sine wave for 1 second (48kHz, mono)
-                        //let test_pcm = Self::generate_sine_wave(440.0, 1.0);
-                        //let _ = buffer.pcm_buffer_tx.send(test_pcm);
-                        //tracing::info!("Injected test sine wave into PCM buffer for group_id={}", group_id);
+                        let mut playout = buffer.playout_buffer.lock().unwrap();
+                        let stored = StoredPacket { pcm, decrypted: true, seq };
+                        playout.store_packet(stored);
                     }
                     Err(_) => {
-                        tracing::error!("Decoded audio is of length {} when it should be {} for group_id={}", len, RAW_AUDIO_SIZE, group_id);
+                        tracing::error!("Decoded audio is not 960 samples for player_id={}", player_id);
                     }
                 }
             }
             Err(e) => {
-                tracing::error!("Opus decode failed for group_id={}: {:?}", group_id, e);
+                tracing::error!("Opus decode failed for player_id={}: {:?}", player_id, e);
             }
         }
-    }
-
-    /// Generate a mono 440Hz sine wave for `duration_secs` seconds (i16 PCM, 48kHz)
-    #[allow(dead_code)]
-    pub fn generate_sine_wave(freq: f32, duration_secs: f32) -> RawAudio {
-        let sample_rate = 48000.0;
-        let samples = RAW_AUDIO_SIZE.min((sample_rate * duration_secs) as usize);
-        let mut buf = [0i16; RAW_AUDIO_SIZE];
-        for i in 0..samples {
-            let t = i as f32 / sample_rate;
-            let val = (freq * 2.0 * PI * t).sin();
-            buf[i] = (val * i16::MAX as f32 * 0.8) as i16; // 20% volume
-        }
-        buf
     }
 }
 

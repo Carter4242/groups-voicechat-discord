@@ -35,6 +35,7 @@ uuid = { version = "1", features = ["v4"] }
 # force using ring instead of aws-lc-rs for crypto
 # if we don't specify which crashes happen
 rustls = { version = "0.23.11", features = ["logging", "ring", "std", "tls12"], default-features = false }
+hound = "3.5.1"
 
 [dependencies.tokio]
 version = "1.38.0"
