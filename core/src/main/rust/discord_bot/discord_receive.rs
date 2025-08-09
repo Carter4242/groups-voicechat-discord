@@ -36,7 +36,6 @@ impl EventHandler for VoiceHandler {
             // Collect all current SSRCs and their data
             for (&ssrc, data) in tick.speaking.iter() {
                 let Some(packet) = data.packet.as_ref() else {
-                    tracing::warn!("VoiceHandler: Missing packet for vc_id={}", self.vc_id);
                     continue;
                 };
                 let Some(rtp) = RtpPacket::new(&packet.packet) else {
