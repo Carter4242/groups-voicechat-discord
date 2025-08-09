@@ -35,7 +35,6 @@ public final class DiscordBot {
             platform.warn("No group audio channels to send Discord audio to");
             return;
         }
-        platform.info("Sending " + opusPackets.length + " Discord audio packets to each group member's channel list");
         for (var entry : groupChannels.entrySet()) {
             UUID playerId = entry.getKey();
             var channelList = entry.getValue();
@@ -61,7 +60,6 @@ public final class DiscordBot {
                             } else {
                                 channelList.add(newChannel);
                             }
-                            platform.info("Created new StaticAudioChannel for player " + playerId + " in group " + groupId + " for packet index " + i);
                         } else {
                             platform.error("Failed to create StaticAudioChannel for player " + playerId + " in group " + groupId + " for packet index " + i);
                         }
@@ -96,7 +94,6 @@ public final class DiscordBot {
         }
         running = true;
         discordAudioThread = new Thread(() -> {
-            long lastPacketTime = -1;
             while (running && !freed) {
                 try {
                     if (freed) break;
@@ -104,13 +101,7 @@ public final class DiscordBot {
                     if (freed) break;
 
                     if (result instanceof byte[][] packets) {
-                        long now = System.currentTimeMillis();
                         if (packets.length > 0) {
-                            if (lastPacketTime != -1) {
-                                long delta = now - lastPacketTime;
-                                platform.info(delta + " ms since last Discord audio packet for vc_id=" + vcId);
-                            }
-                            lastPacketTime = now;
                             sendDiscordAudioToGroup(packets);
                         }
                     } else {
@@ -210,7 +201,6 @@ public final class DiscordBot {
         try {
             var senderConn = event.getSenderConnection();
             if (senderConn == null) {
-                platform.info("[handleGroupMicrophonePacketEvent] No sender connection, ignoring.");
                 return;
             }
             var group = senderConn.getGroup();
@@ -219,7 +209,6 @@ public final class DiscordBot {
             }
             var sender = senderConn.getPlayer();
             if (sender == null) {
-                platform.info("[handleGroupMicrophonePacketEvent] No sender player, ignoring.");
                 return;
             }
             if (Core.bots.isEmpty()) {

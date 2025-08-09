@@ -93,7 +93,7 @@ impl PlayoutBuffer {
             // If too many consecutive store fails, treat as desync and reset buffer
             if self.consecutive_store_fails >= err_threshold {
                 let old_seq = self.next_seq;
-                tracing::warn!(
+                tracing::info!(
                     old_seq,
                     new_seq = pkt_seq,
                     fails = self.consecutive_store_fails,
@@ -108,7 +108,7 @@ impl PlayoutBuffer {
 
         // If buffer is at or above capacity, drop the packet and log
         if self.buffer.len() >= self.capacity {
-            tracing::warn!(seq = pkt_seq, capacity = self.capacity, buf_size = self.buffer.len(), "store_packet: buffer full");
+            tracing::info!(seq = pkt_seq, capacity = self.capacity, buf_size = self.buffer.len(), "store_packet: buffer full");
         }
         
         while self.buffer.len() <= desired_index {
@@ -129,7 +129,7 @@ impl PlayoutBuffer {
         let out = match self.buffer.pop_front() {
             Some(Some(pkt)) => {
                 if self.buffer.len() >= 10 {
-                    tracing::warn!(seq = pkt.seq, buf_size = self.buffer.len(), "fetch_packet: returning packet with seq");
+                    tracing::info!(seq = pkt.seq, buf_size = self.buffer.len(), "fetch_packet: returning packet with seq");
                 } else {
                     tracing::info!(seq = pkt.seq, buf_size = self.buffer.len(), "fetch_packet: returning packet with seq");
                 }

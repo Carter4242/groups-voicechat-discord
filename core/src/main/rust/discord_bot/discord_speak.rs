@@ -244,7 +244,7 @@ impl io::Read for PlayerAudioSource {
                 std::time::Duration::from_secs(0)
             };
             if elapsed > std::time::Duration::from_millis(30) {
-                tracing::warn!(?elapsed, "Actual time since last frame sent (over 30ms!)");
+                tracing::info!(?elapsed, "Actual time since last frame sent (over 30ms!)");
             } else {
                 tracing::info!(?elapsed, "Actual time since last frame sent");
             }

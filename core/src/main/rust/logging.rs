@@ -79,7 +79,7 @@ pub fn ensure_init() {
         .append(true)
         .open("v_dis.log")
         .expect("Unable to open log file");
-    let (filter, reload_handle) = reload::Layer::new(CustomFilter::new(Level::INFO));
+    let (filter, reload_handle) = reload::Layer::new(CustomFilter::new(Level::WARN));
     if tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_writer(file).with_ansi(false))
@@ -118,6 +118,6 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_Core_setDebugLevel<'loca
     }
     // Force set logging level to TRACE after any call
     reload_handle
-        .modify(|filter| filter.set_max_level(Level::INFO))
+        .modify(|filter| filter.set_max_level(Level::WARN))
         .expect("failed to force logging level to TRACE");
 }
