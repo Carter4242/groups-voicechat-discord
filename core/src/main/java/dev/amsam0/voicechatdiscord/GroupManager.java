@@ -16,11 +16,8 @@ import static dev.amsam0.voicechatdiscord.Core.platform;
 public final class GroupManager {
     public static final Map<UUID, List<ServerPlayer>> groupPlayerMap = new HashMap<>();
 
-    // Map groupId -> DiscordBot (currently only first group is supported)
+    // Map groupId -> DiscordBot
     public static final Map<UUID, DiscordBot> groupBotMap = new HashMap<>();
-
-    // Tracks the first group created on the server
-    public static UUID firstGroupId = null;
 
     // Map: groupId -> (player UUID -> List<StaticAudioChannel>)
     public static final Map<UUID, Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>>> groupAudioChannels = new HashMap<>();
@@ -32,32 +29,33 @@ public final class GroupManager {
     }
 
     private static void createStaticAudioChannelIfFirstGroup(Group group, ServerPlayer player, VoicechatConnection connection) {
-        if (firstGroupId != null && firstGroupId.equals(group.getId())) {
-            platform.info("[createStaticAudioChannelIfFirstGroup] Attempting to create StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId());
-            var level = player.getServerLevel();
-            var randomChannelId = java.util.UUID.randomUUID();
-            var staticChannel = api.createStaticAudioChannel(randomChannelId, level, connection);
-            if (staticChannel != null) {
-                groupAudioChannels
-                    .computeIfAbsent(group.getId(), k -> new HashMap<>())
-                    .computeIfAbsent(player.getUuid(), k -> new ArrayList<>())
-                    .add(staticChannel);
-                platform.info("Created StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId() + " (channelId=" + randomChannelId + ")");
-            } else {
-                platform.error("Failed to create StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId() + " (channelId=" + randomChannelId + ")");
-            }
+        platform.info("[createStaticAudioChannelIfFirstGroup] Attempting to create StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId());
+        var level = player.getServerLevel();
+        var randomChannelId = java.util.UUID.randomUUID();
+        var staticChannel = api.createStaticAudioChannel(randomChannelId, level, connection);
+        if (staticChannel != null) {
+            groupAudioChannels
+                .computeIfAbsent(group.getId(), k -> new HashMap<>())
+                .computeIfAbsent(player.getUuid(), k -> new ArrayList<>())
+                .add(staticChannel);
+            platform.info("Created StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId() + " (channelId=" + randomChannelId + ")");
         } else {
-            platform.info("[createStaticAudioChannelIfFirstGroup] Not first group or firstGroupId not set, skipping StaticAudioChannel creation.");
+            platform.error("Failed to create StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId() + " (channelId=" + randomChannelId + ")");
         }
     }
 
     @SuppressWarnings("DataFlowIssue")
     public static void onJoinGroup(JoinGroupEvent event) {
         Group group = event.getGroup();
+        // Only handle join if group is tracked in groupBotMap (i.e., is a Discord group)
+        if (!groupBotMap.containsKey(group.getId())) {
+            platform.info("[onJoinGroup] Skipping group " + group.getName() + " (" + group.getId() + "): not in groupBotMap (not a Discord group)");
+            return;
+        }
         ServerPlayer player = event.getConnection().getPlayer();
 
         platform.info("[onJoinGroup] Event fired for group: " + group.getName() + " (" + group.getId() + ") and player: " + platform.getName(player) + " (" + player.getUuid() + ")");
-        platform.info("[onJoinGroup] firstGroupId=" + firstGroupId + ", groupId=" + group.getId());
+        platform.info("[onJoinGroup] groupId=" + group.getId());
 
         List<ServerPlayer> players = getPlayers(group);
         platform.info("[onJoinGroup] Current players in group: " + players.size());
@@ -74,38 +72,22 @@ public final class GroupManager {
     public static void onLeaveGroup(LeaveGroupEvent event) {
         Group group = event.getGroup();
         ServerPlayer player = event.getConnection().getPlayer();
-        if (group == null) {
-            for (var groupEntry : groupPlayerMap.entrySet()) {
-                List<ServerPlayer> playerList = groupEntry.getValue();
-                if (playerList.stream().anyMatch(serverPlayer -> serverPlayer.getUuid() == player.getUuid())) {
-                    UUID playerGroup = groupEntry.getKey();
-                    platform.info(player.getUuid() + " (" + platform.getName(player) + ") left " + playerGroup + " (" + api.getGroup(playerGroup).getName() + ")");
-                    playerList.remove(player);
-                    // Remove StaticAudioChannel for this player if present
-                    Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>> channels = groupAudioChannels.get(playerGroup);
-                    if (channels != null) {
-                        var removed = channels.remove(player.getUuid());
-                        if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + player.getUuid() + " in group " + playerGroup);
-                    }
-                    return;
-                }
-            }
-            platform.info(player.getUuid() + " (" + platform.getName(player) + ") left a group but we couldn't find the group they left");
-            return;
-        }
 
         platform.info(player.getUuid() + " (" + platform.getName(player) + ") left " + group.getId() + " (" + group.getName() + ")");
 
+        // Only handle leave if group is tracked in groupBotMap (i.e., is a Discord group)
+        if (!groupBotMap.containsKey(group.getId())) {
+            platform.info("[onLeaveGroup] Skipping group " + group.getName() + " (" + group.getId() + "): not in groupBotMap (not a Discord group)");
+            return;
+        }
+
         List<ServerPlayer> players = getPlayers(group);
         players.remove(player);
-        // If this is the first group, remove player from DiscordBot
-        if (firstGroupId != null && firstGroupId.equals(group.getId())) {
-            // Remove StaticAudioChannel for this player if present
-            Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>> channels = groupAudioChannels.get(group.getId());
-            if (channels != null) {
-                var removed = channels.remove(player.getUuid());
-                if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + player.getUuid() + " in group " + group.getId());
-            }
+        // Remove StaticAudioChannel for this player if present
+        Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>> channels = groupAudioChannels.get(group.getId());
+        if (channels != null) {
+            var removed = channels.remove(player.getUuid());
+            if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + player.getUuid() + " in group " + group.getId());
         }
     }
 
@@ -114,18 +96,9 @@ public final class GroupManager {
         Group group = event.getGroup();
         UUID groupId = group.getId();
 
-        if (firstGroupId == null) {
-            firstGroupId = groupId;
-            platform.info("First group created: " + group.getName() + " (" + groupId + ")");
-            // Start Discord bot for the first group
-            if (!Core.bots.isEmpty() && !Core.bots.get(0).isStarted()) {
-                DiscordBot bot = Core.bots.get(0);
-                new Thread(() -> bot.logInAndStart(null), "voicechat-discord: Bot AutoStart for First Group").start();
-                groupBotMap.put(groupId, bot);
-                platform.info("Auto-started Discord bot for first group: " + group.getName() + ", linked groupId " + groupId + " to bot vc_id=" + bot.vcId);
-            } else {
-                platform.warn("No available Discord bot to auto-start for first group.");
-            }
+        if (group.hasPassword()) {
+            platform.info("Not adding group " + group.getName() + " (" + groupId + ") to Discord: group has a password.");
+            return;
         }
 
         VoicechatConnection connection = event.getConnection();
@@ -135,11 +108,40 @@ public final class GroupManager {
         }
         ServerPlayer player = connection.getPlayer();
 
-        platform.info(player.getUuid() + " (" + platform.getName(player) + ") created " + groupId + " (" + group.getName() + ")");
+        // Only allow two specific users to create Discord groups
+        UUID allowed1 = UUID.fromString("aa1afe1c-0e1d-4b90-9208-1c703f818fdd");
+        UUID allowed2 = UUID.fromString("bd50ddce-5d31-4380-b1cc-4e11eb78659a");
+        if (!player.getUuid().equals(allowed1) && !player.getUuid().equals(allowed2)) {
+            platform.info("Not adding group " + group.getName() + " (" + groupId + ") to Discord: creator " + player.getUuid() + " is not allowed.");
+            return;
+        }
 
-        List<ServerPlayer> players = getPlayers(group);
-        players.add(player);
-        createStaticAudioChannelIfFirstGroup(group, player, connection);
+        if (!Core.bots.isEmpty()) {
+            DiscordBot found = null;
+            for (DiscordBot candidate : Core.bots) {
+                if (!candidate.isStarted() && !groupBotMap.containsValue(candidate)) {
+                    found = candidate;
+                    break;
+                }
+            }
+            if (found == null) {
+                platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")! All bots are started or already assigned.\n" +
+                    "Bot status: " + Core.bots.stream().map(b -> "vc_id=" + b.vcId + ", started=" + b.isStarted() + ", assigned=" + groupBotMap.containsValue(b)).toList());
+                return;
+            }
+            final DiscordBot bot = found;
+            new Thread(() -> bot.logInAndStart(groupId), "voicechat-discord: Bot AutoStart for Group").start();
+            groupBotMap.put(groupId, bot);
+            platform.info("Linked groupId " + groupId + " (" + group.getName() + ") to bot vc_id=" + bot.vcId);
+
+            platform.info(player.getUuid() + " (" + platform.getName(player) + ") created " + groupId + " (" + group.getName() + ")");
+
+            List<ServerPlayer> players = getPlayers(group);
+            players.add(player);
+            createStaticAudioChannelIfFirstGroup(group, player, connection);
+        } else {
+            platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")");
+        }
     }
 
     @SuppressWarnings("DataFlowIssue")
@@ -149,21 +151,14 @@ public final class GroupManager {
 
         platform.info("onGroupRemoved: Group removed: " + groupId + ", " + group.getName() + ")");
 
-        if (firstGroupId != null && firstGroupId.equals(groupId)) {
-            platform.info("onGroupRemoved: First group removed: " + group.getName() + " (" + groupId + ")");
-            firstGroupId = null;
-            // Stop Discord bot for the first group
-            DiscordBot bot = groupBotMap.remove(groupId);
-            if (bot != null && bot.isStarted()) {
-                platform.info("onGroupRemoved: Stopping Discord bot for first group: " + group.getName() + " (vc_id=" + bot.vcId + ")");
-                bot.stop();
-                platform.info("onGroupRemoved: Stopped Discord bot for first group: " + group.getName() + " (vc_id=" + bot.vcId + ")");
-            }
-            // Remove all StaticAudioChannels for this group
-            groupAudioChannels.remove(groupId);
+        DiscordBot bot = groupBotMap.remove(groupId);
+        if (bot != null) {
+            platform.info("onGroupRemoved: Stopping Discord bot for group: " + group.getName() + " (vc_id=" + bot.vcId + ")");
+            bot.stop();
+            platform.info("onGroupRemoved: Stopped Discord bot for group: " + group.getName() + " (vc_id=" + bot.vcId + ")");
         }
 
+        groupAudioChannels.remove(groupId);
         groupPlayerMap.remove(groupId);
-        groupBotMap.remove(groupId); // Clean up any mapping just in case
     }
 }

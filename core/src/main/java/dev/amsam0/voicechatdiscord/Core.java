@@ -129,5 +129,9 @@ public final class Core {
             discordBot.free();
         });
         bots.clear();
+        // Also clear all group mappings when bots are cleared
+        dev.amsam0.voicechatdiscord.GroupManager.groupPlayerMap.clear();
+        dev.amsam0.voicechatdiscord.GroupManager.groupBotMap.clear();
+        dev.amsam0.voicechatdiscord.GroupManager.groupAudioChannels.clear();
     }
 }
