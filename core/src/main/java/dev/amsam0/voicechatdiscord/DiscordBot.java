@@ -19,11 +19,11 @@ public final class DiscordBot {
     private final long ptr;
 
     /**
-     * Send a list of Discord Opus audio packets to all group members in the first group.
+     * Send a list of Discord Opus audio packets to all group members in the specified group.
+     * @param groupId The group to send audio to
      * @param opusPackets List of Opus encoded audio packets from Discord
      */
-    public void sendDiscordAudioToGroup(byte[][] opusPackets) {
-        UUID groupId = dev.amsam0.voicechatdiscord.GroupManager.firstGroupId;
+    public void sendDiscordAudioToGroup(UUID groupId, byte[][] opusPackets) {
         if (groupId == null) {
             platform.warn("No group to send Discord audio to");
             return;
@@ -85,7 +85,7 @@ public final class DiscordBot {
     /**
      * Starts the background thread for Discord audio bridging.
      */
-    public void startDiscordAudioThread() {
+    public void startDiscordAudioThread(UUID groupId) {
         if (freed) {
             platform.warn("Attempted to start audio thread after bot was freed");
             return;
@@ -100,7 +100,7 @@ public final class DiscordBot {
 
                     if (result instanceof byte[][] packets) {
                         if (packets.length > 0) {
-                            sendDiscordAudioToGroup(packets);
+                            sendDiscordAudioToGroup(groupId, packets);
                         }
                     } else {
                         platform.warn("Unexpected return type from _blockForSpeakingBufferOpusData: " + (result == null ? "null" : result.getClass()));
@@ -128,10 +128,10 @@ public final class DiscordBot {
         }
     }
 
-    public void logInAndStart(ServerPlayer player) {
+    public void logInAndStart(UUID groupId) {
         if (logIn()) {
             start();
-            startDiscordAudioThread(); // Start audio thread only after bot is ready
+            startDiscordAudioThread(groupId); // Start audio thread only after bot is ready
         }
     }
 
@@ -205,12 +205,12 @@ public final class DiscordBot {
             if (group == null) {
                 return;
             }
-            var sender = senderConn.getPlayer();
-            if (sender == null) {
+            var bot = dev.amsam0.voicechatdiscord.GroupManager.groupBotMap.get(group.getId());
+            if (bot == null) {
                 return;
             }
-            if (Core.bots.isEmpty()) {
-                platform.warn("[handleGroupMicrophonePacketEvent] No bots available!");
+            var sender = senderConn.getPlayer();
+            if (sender == null) {
                 return;
             }
             var packet = event.getPacket();
@@ -218,7 +218,7 @@ public final class DiscordBot {
                 platform.warn("[handleGroupMicrophonePacketEvent] Packet is not convertable to StaticSoundPacket!");
                 return;
             }
-            Core.bots.get(0).handlePacket(convertable.staticSoundPacketBuilder().build(), sender);
+            bot.handlePacket(convertable.staticSoundPacketBuilder().build(), sender);
         } catch (Throwable t) {
             platform.error("[handleGroupMicrophonePacketEvent] Exception occurred", t);
         }
