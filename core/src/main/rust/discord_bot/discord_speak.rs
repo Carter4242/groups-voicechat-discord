@@ -19,9 +19,8 @@ use songbird::driver::opus::coder::Decoder as OpusDecoder;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+
 #[inline]
-
-
 pub fn create_playable_input(player_to_discord_buffers: Arc<dashmap::DashMap<Uuid, PlayerToDiscordBuffer>>) -> Result<Input, Report> {
     let audio_source = PlayerAudioSource {
         player_to_discord_buffers,
