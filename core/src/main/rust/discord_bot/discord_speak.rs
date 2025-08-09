@@ -17,28 +17,17 @@ use crate::discord_bot::PlayerToDiscordBuffer;
 use crate::discord_bot::playout_buffer::PacketLookup;
 use songbird::driver::opus::coder::Decoder as OpusDecoder;
 use std::collections::HashMap;
-use std::fs::File;
-use hound;
 use std::sync::Mutex;
 
 #[inline]
 
 
 pub fn create_playable_input(player_to_discord_buffers: Arc<dashmap::DashMap<Uuid, PlayerToDiscordBuffer>>) -> Result<Input, Report> {
-    let wav_writers = HashMap::new();
-    let combined_writer = Some(hound::WavWriter::create("combined_output.wav", hound::WavSpec {
-        channels: 1,
-        sample_rate: SAMPLE_RATE,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    })?);
     let audio_source = PlayerAudioSource {
         player_to_discord_buffers,
         next_frame_time: None,
         last_frame_sent: None,
         //packet_timestamps: std::collections::VecDeque::with_capacity(100),
-        wav_writers,
-        combined_writer,
         prev_zero: false,
         opus_decoders: Mutex::new(HashMap::new()),
     };
@@ -59,8 +48,6 @@ struct PlayerAudioSource {
     next_frame_time: Option<std::time::Instant>,
     last_frame_sent: Option<std::time::Instant>,
     //packet_timestamps: std::collections::VecDeque<std::time::Instant>,
-    wav_writers: HashMap<Uuid, hound::WavWriter<std::io::BufWriter<File>>>,
-    combined_writer: Option<hound::WavWriter<std::io::BufWriter<File>>>,
     prev_zero: bool,
     opus_decoders: Mutex<HashMap<Uuid, OpusDecoder>>,
 }
@@ -196,33 +183,7 @@ impl io::Read for PlayerAudioSource {
                 }
                 frames_returned += 1;
 
-                // Write each user's PCM to a separate wav file
-                for (uuid, pcm) in &user_pcm {
-                    if !self.wav_writers.contains_key(uuid) {
-                        let fname = format!("user_{}.wav", uuid);
-                        tracing::info!("Creating WAV writer for user {}", uuid);
-                        let writer = hound::WavWriter::create(fname, hound::WavSpec {
-                            channels: 1,
-                            sample_rate: SAMPLE_RATE,
-                            bits_per_sample: 16,
-                            sample_format: hound::SampleFormat::Int,
-                        }).unwrap();
-                        self.wav_writers.insert(*uuid, writer);
-                    }
-                    if let Some(writer) = self.wav_writers.get_mut(uuid) {
-                        for sample in pcm.iter() {
-                            writer.write_sample(*sample).ok();
-                        }
-                    }
-                }
-
                 let combined = crate::audio_util::combine_audio_parts(all_samples);
-
-                if let Some(writer) = self.combined_writer.as_mut() {
-                    for sample in combined.iter() {
-                        writer.write_sample(*sample).ok();
-                    }
-                }
 
                 for sample in combined.iter() {
                     let converted = (*sample as f32) / (i16::MAX as f32);
