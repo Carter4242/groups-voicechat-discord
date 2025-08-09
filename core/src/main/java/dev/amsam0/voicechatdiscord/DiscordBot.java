@@ -1,12 +1,10 @@
 package dev.amsam0.voicechatdiscord;
 
 import de.maxhenkel.voicechat.api.ServerPlayer;
-import de.maxhenkel.voicechat.api.Group;
 import de.maxhenkel.voicechat.api.packets.StaticSoundPacket;
 
 import java.util.UUID;
 
-import static dev.amsam0.voicechatdiscord.Core.api;
 import static dev.amsam0.voicechatdiscord.Core.platform;
 
 public final class DiscordBot {

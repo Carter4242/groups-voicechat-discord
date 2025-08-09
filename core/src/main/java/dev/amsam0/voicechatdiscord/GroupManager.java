@@ -15,7 +15,6 @@ import static dev.amsam0.voicechatdiscord.Core.api;
 import static dev.amsam0.voicechatdiscord.Core.platform;
 
 public final class GroupManager {
-    public static final BiMap<UUID, Integer> groupFriendlyIds = new BiMap<>();
     public static final Map<UUID, List<ServerPlayer>> groupPlayers = new HashMap<>();
 
     // Tracks the first group created on the server
@@ -125,15 +124,6 @@ public final class GroupManager {
             }
         }
 
-        if (groupFriendlyIds.get(groupId) == null) {
-            int friendlyId = 1;
-            Collection<Integer> friendlyIds = groupFriendlyIds.values();
-            while (friendlyIds.contains(friendlyId)) {
-                friendlyId++;
-            }
-            groupFriendlyIds.put(groupId, friendlyId);
-        }
-
         VoicechatConnection connection = event.getConnection();
         if (connection == null) {
             platform.info("someone created " + groupId + " (" + group.getName() + ")");
@@ -153,7 +143,7 @@ public final class GroupManager {
         Group group = event.getGroup();
         UUID groupId = group.getId();
 
-        platform.info("onGroupRemoved: Group removed: " + groupId + " (" + groupFriendlyIds.get(groupId) + ", " + group.getName() + ")");
+        platform.info("onGroupRemoved: Group removed: " + groupId + ", " + group.getName() + ")");
 
         if (firstGroupId != null && firstGroupId.equals(groupId)) {
             platform.info("onGroupRemoved: First group removed: " + group.getName() + " (" + groupId + ")");
@@ -169,6 +159,5 @@ public final class GroupManager {
         }
 
         groupPlayers.remove(groupId);
-        groupFriendlyIds.remove(groupId);
     }
 }
