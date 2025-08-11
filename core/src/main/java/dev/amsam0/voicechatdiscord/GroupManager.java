@@ -7,13 +7,27 @@ import de.maxhenkel.voicechat.api.events.CreateGroupEvent;
 import de.maxhenkel.voicechat.api.events.JoinGroupEvent;
 import de.maxhenkel.voicechat.api.events.LeaveGroupEvent;
 import de.maxhenkel.voicechat.api.events.RemoveGroupEvent;
+import de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static dev.amsam0.voicechatdiscord.Core.api;
 import static dev.amsam0.voicechatdiscord.Core.platform;
 
 public final class GroupManager {
+    // Map groupId -> owner UUID
+    public static final Map<UUID, UUID> groupOwnerMap = new HashMap<>();
+    // Discord userId -> channelId (for all bots/groups)
+    public static final Map<Long, Long> discordUserChannelMap = new ConcurrentHashMap<>();
+    // Discord userId -> username (for all bots/groups)
+    public static final Map<Long, String> discordUserNameMap = new ConcurrentHashMap<>();
     // Queue join events for groups whose Discord channel is still being created
     public static final Map<UUID, List<JoinGroupEvent>> pendingJoinEvents = new HashMap<>();
     // Map GroupId -> List of players
@@ -21,7 +35,7 @@ public final class GroupManager {
     // Map groupId -> DiscordBot
     public static final Map<UUID, DiscordBot> groupBotMap = new HashMap<>();
     // Map: groupId -> (player UUID -> List<StaticAudioChannel>)
-    public static final Map<UUID, Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>>> groupAudioChannels = new HashMap<>();
+    public static final Map<UUID, Map<UUID, List<StaticAudioChannel>>> groupAudioChannels = new HashMap<>();
     // Track groups pending Discord channel creation
     public static final Map<UUID, DiscordBot> pendingGroupCreations = new HashMap<>();
     // Track groups removed before channel creation completes
@@ -36,7 +50,7 @@ public final class GroupManager {
     private static void handlePlayerJoin(Group group, ServerPlayer player, VoicechatConnection connection, DiscordBot bot) {
         platform.info("[handlePlayerJoin] Handling join for player " + player.getUuid() + " in group " + group.getId());
         var level = player.getServerLevel();
-        var randomChannelId = java.util.UUID.randomUUID();
+        var randomChannelId = UUID.randomUUID();
         var staticChannel = api.createStaticAudioChannel(randomChannelId, level, connection);
         if (staticChannel != null) {
             groupAudioChannels
@@ -90,6 +104,28 @@ public final class GroupManager {
 
         if (bot != null) {
             bot.updateDiscordVoiceChannelNameAsync(players.size(), group.getName());
+
+            // Send a list of all users currently in the Discord VC for this group
+            Long discordChannelId = bot.getDiscordChannelId();
+            if (discordChannelId != null) {
+                List<String> discordUsers = new ArrayList<>();
+                for (var entry : discordUserChannelMap.entrySet()) {
+                    if (entry.getValue() != null && entry.getValue().equals(discordChannelId)) {
+                        String name = discordUserNameMap.get(entry.getKey());
+                        if (name != null) discordUsers.add(name);
+                    }
+                }
+                if (!discordUsers.isEmpty()) {
+                    List<Component> components = new ArrayList<>();
+                    components.add(Component.blue("[Discord] "));
+                    components.add(Component.white("Users in Discord VC: "));
+                    for (int i = 0; i < discordUsers.size(); i++) {
+                        if (i > 0) components.add(Component.white(", "));
+                        components.add(Component.gold(discordUsers.get(i)));
+                    }
+                    platform.sendMessage(player, components.toArray(new Component[0]));
+                }
+            }
         }
     }
 
@@ -109,7 +145,7 @@ public final class GroupManager {
         List<ServerPlayer> players = getPlayers(group);
         players.removeIf(p -> p.getUuid().equals(player.getUuid()));
         // Remove StaticAudioChannel for this player if present
-        Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>> channels = groupAudioChannels.get(group.getId());
+        Map<UUID, List<StaticAudioChannel>> channels = groupAudioChannels.get(group.getId());
         if (channels != null) {
             var removed = channels.remove(player.getUuid());
             if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + player.getUuid() + " in group " + group.getId());
@@ -141,6 +177,9 @@ public final class GroupManager {
             return;
         }
         ServerPlayer player = connection.getPlayer();
+
+        // Track the owner of the group
+        groupOwnerMap.put(groupId, player.getUuid());
 
         // Only allow two specific users to create Discord groups
         UUID allowed1 = UUID.fromString("aa1afe1c-0e1d-4b90-9208-1c703f818fdd");
@@ -243,5 +282,6 @@ public final class GroupManager {
 
         groupAudioChannels.remove(groupId);
         groupPlayerMap.remove(groupId);
+        groupOwnerMap.remove(groupId);
     }
 }

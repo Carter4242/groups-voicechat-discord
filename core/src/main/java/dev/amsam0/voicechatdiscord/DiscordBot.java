@@ -2,12 +2,16 @@ package dev.amsam0.voicechatdiscord;
 
 import de.maxhenkel.voicechat.api.ServerPlayer;
 import de.maxhenkel.voicechat.api.packets.StaticSoundPacket;
+import de.maxhenkel.voicechat.api.packets.ConvertablePacket;
 
 import java.util.UUID;
 
 import static dev.amsam0.voicechatdiscord.Core.platform;
 
 public final class DiscordBot {
+    // Track the last set of talking Discord users shown to the group
+    private java.util.Set<String> lastSentTalkingUsers = java.util.Collections.emptySet();
+    private long lastSentTime = 0L;
     /**
      * Thread that polls for Discord audio and sends it to group members.
      */
@@ -21,64 +25,11 @@ public final class DiscordBot {
     // Store the Discord voice channel ID for this group
     private volatile Long discordChannelId = null;
 
-    /**
-     * Send a list of Discord Opus audio packets to all group members in the specified group.
-     * @param groupId The group to send audio to
-     * @param opusPackets List of Opus encoded audio packets from Discord
-     */
-    public void sendDiscordAudioToGroup(UUID groupId, byte[][] opusPackets) {
-        if (groupId == null) {
-            platform.warn("No group to send Discord audio to");
-            return;
-        }
-        var groupChannels = dev.amsam0.voicechatdiscord.GroupManager.groupAudioChannels.get(groupId);
-        if (groupChannels == null || groupChannels.isEmpty()) {
-            platform.warn("No group audio channels to send Discord audio to");
-            return;
-        }
-        for (var entry : groupChannels.entrySet()) {
-            UUID playerId = entry.getKey();
-            var channelList = entry.getValue();
-            if (channelList == null) {
-                channelList = new java.util.ArrayList<>();
-                groupChannels.put(playerId, channelList);
-            }
-
-            for (int i = 0; i < opusPackets.length; i++) {
-                if (i >= channelList.size() || channelList.get(i) == null || channelList.get(i).isClosed()) {
-                    // Only fetch these if we need to create a new channel
-                    var connection = dev.amsam0.voicechatdiscord.Core.api.getConnectionOf(playerId);
-                    var player = connection != null ? connection.getPlayer() : null;
-                    var group = dev.amsam0.voicechatdiscord.Core.api.getGroup(groupId);
-                    var level = player != null ? player.getServerLevel() : null;
-                    if (group != null && level != null && connection != null) {
-                        // Use a random UUID for the channelId instead of groupId
-                        var randomChannelId = java.util.UUID.randomUUID();
-                        var newChannel = dev.amsam0.voicechatdiscord.Core.api.createStaticAudioChannel(randomChannelId, level, connection);
-                        if (newChannel != null) {
-                            if (i < channelList.size()) {
-                                channelList.set(i, newChannel);
-                            } else {
-                                channelList.add(newChannel);
-                            }
-                        } else {
-                            platform.error("Failed to create StaticAudioChannel for player " + playerId + " in group " + groupId + " for packet index " + i);
-                        }
-                    } else {
-                        platform.error("Cannot create StaticAudioChannel: missing group, level, or connection for player " + playerId);
-                        continue;
-                    }
-                }
-                var channel = channelList.get(i);
-                byte[] opusData = opusPackets[i];
-                if (channel != null && !channel.isClosed() && opusData != null && opusData.length > 0) {
-                    channel.send(opusData);
-                }
-            }
-        }
+    public Long getDiscordChannelId() {
+        return discordChannelId;
     }
 
-    private static native long _new(String token, long categoryId);
+    private native long _new(String token, long categoryId);
 
     public DiscordBot(String token, long categoryId) {
         this.categoryId = categoryId;
@@ -131,7 +82,6 @@ public final class DiscordBot {
      */
     public void deleteDiscordVoiceChannelAsync(Runnable afterDelete) {
         if (freed) {
-            platform.warn("Attempted to delete Discord channel after bot was freed");
             if (afterDelete != null) afterDelete.run();
             return;
         }
@@ -234,12 +184,10 @@ public final class DiscordBot {
                     Object result = _blockForSpeakingBufferOpusData(ptr);
                     if (freed) break;
 
-                    if (result instanceof byte[][] packets) {
-                        if (packets.length > 0) {
-                            sendDiscordAudioToGroup(groupId, packets);
-                        }
+                    if (result instanceof byte[][][] userPackets && userPackets.length > 0) {
+                        sendDiscordAudioToGroup(groupId, userPackets);
                     } else {
-                        platform.warn("Unexpected return type from _blockForSpeakingBufferOpusData: " + (result == null ? "null" : result.getClass()));
+                        sendDiscordAudioToGroup(groupId, new byte[0][][]);
                     }
                 } catch (Throwable t) {
                     platform.error("Error in Discord audio thread for bot (categoryId=" + categoryId + ")", t);
@@ -248,6 +196,111 @@ public final class DiscordBot {
         }, "DiscordAudioBridgeThread");
         discordAudioThread.setDaemon(true);
         discordAudioThread.start();
+    }
+
+    
+    /**
+     * Send a list of Discord Opus audio packets (with usernames) to all group members in the specified group.
+     * @param groupId The group to send audio to
+     * @param userPackets Array of [usernameBytes, opusBytes] for each packet
+     */
+    public void sendDiscordAudioToGroup(UUID groupId, byte[][][] userPackets) {
+        // Collect currently talking Discord usernames
+        java.util.Set<String> talkingUsersSet = new java.util.HashSet<>();
+        for (int i = 0; i < userPackets.length; i++) {
+            byte[][] tuple = userPackets[i];
+            if (tuple == null || tuple.length != 2) continue;
+            String username = new String(tuple[0]);
+            byte[] opusData = tuple[1];
+            if (opusData != null && opusData.length > 0 && username != null && !username.isEmpty()) {
+                talkingUsersSet.add(username);
+            }
+        }
+        // Sort usernames alphabetically for display
+        java.util.List<String> talkingUsers = new java.util.ArrayList<>(talkingUsersSet);
+        java.util.Collections.sort(talkingUsers, String.CASE_INSENSITIVE_ORDER);
+
+        // Only update action bar if the set of talking users changed, or every 2.0s
+        long now = System.currentTimeMillis();
+        boolean usersChanged = !new java.util.HashSet<>(talkingUsers).equals(lastSentTalkingUsers);
+        boolean timeout = (now - lastSentTime > 2000);
+        if ((usersChanged && talkingUsers.isEmpty()) || (usersChanged || (timeout && !talkingUsers.isEmpty()))) {
+            lastSentTalkingUsers = new java.util.HashSet<>(talkingUsers);
+            lastSentTime = now;
+            Component[] msg;
+            if (talkingUsers.isEmpty()) {
+                msg = new Component[] { Component.blue("") };
+            } else if (talkingUsers.size() == 1) {
+                msg = new Component[] {
+                    Component.gold(talkingUsers.get(0)),
+                    Component.green(" is talking")
+                };
+            } else {
+                java.util.List<Component> msgList = new java.util.ArrayList<>();
+                for (int i = 0; i < talkingUsers.size(); i++) {
+                    if (i > 0) msgList.add(Component.white(", "));
+                    msgList.add(Component.gold(talkingUsers.get(i)));
+                }
+                msgList.add(Component.green(" are talking"));
+                msg = msgList.toArray(new Component[0]);
+            }
+
+            var players = GroupManager.groupPlayerMap.get(groupId);
+            if (players != null) {
+                for (var serverPlayer : players) {
+                    platform.sendActionBar(serverPlayer, msg);
+                }
+            }
+        }
+
+        if (userPackets.length == 0) {
+            return;
+        }
+        
+        var groupChannels = GroupManager.groupAudioChannels.get(groupId);
+        for (var entry : groupChannels.entrySet()) {
+            UUID playerId = entry.getKey();
+            var channelList = entry.getValue();
+            if (channelList == null) {
+                channelList = new java.util.ArrayList<>();
+                groupChannels.put(playerId, channelList);
+            }
+
+            for (int i = 0; i < userPackets.length; i++) {
+                byte[][] tuple = userPackets[i];
+                if (tuple == null || tuple.length != 2) continue;
+                byte[] opusData = tuple[1];
+
+                if (i >= channelList.size() || channelList.get(i) == null || channelList.get(i).isClosed()) {
+                    // Only fetch these if we need to create a new channel
+                    var connection = Core.api.getConnectionOf(playerId);
+                    var player = connection != null ? connection.getPlayer() : null;
+                    var group = Core.api.getGroup(groupId);
+                    var level = player != null ? player.getServerLevel() : null;
+                    if (group != null && level != null && connection != null) {
+                        // Use a random UUID for the channelId instead of groupId
+                        var randomChannelId = UUID.randomUUID();
+                        var newChannel = Core.api.createStaticAudioChannel(randomChannelId, level, connection);
+                        if (newChannel != null) {
+                            if (i < channelList.size()) {
+                                channelList.set(i, newChannel);
+                            } else {
+                                channelList.add(newChannel);
+                            }
+                        } else {
+                            platform.error("Failed to create StaticAudioChannel for player " + playerId + " in group " + groupId + " for packet index " + i);
+                        }
+                    } else {
+                        platform.error("Cannot create StaticAudioChannel: missing group, level, or connection for player " + playerId);
+                        continue;
+                    }
+                }
+                var channel = channelList.get(i);
+                if (channel != null && !channel.isClosed() && opusData != null && opusData.length > 0) {
+                    channel.send(opusData);
+                }
+            }
+        }
     }
 
     /**
@@ -297,16 +350,33 @@ public final class DiscordBot {
     private native void _stop(long ptr) throws Throwable;
 
     public void stop() {
+        stop(true);
+    }
+
+    /**
+     * Stops the background thread for Discord audio bridging and optionally deletes the Discord voice channel.
+     * @param deleteChannel If true, deletes the Discord voice channel; if false, leaves it intact.
+     */
+    public void stop(boolean deleteChannel) {
         try {
             stopDiscordAudioThread();
-            deleteDiscordVoiceChannelAsync(() -> {
+            if (deleteChannel) {
+                deleteDiscordVoiceChannelAsync(() -> {
+                    try {
+                        _stop(ptr);
+                    } catch (Throwable e) {
+                        platform.error("Failed to stop bot (categoryId=" + categoryId + ")", e);
+                    }
+                    platform.info("DiscordBot.stop finished for categoryId=" + categoryId);
+                });
+            } else {
                 try {
                     _stop(ptr);
                 } catch (Throwable e) {
                     platform.error("Failed to stop bot (categoryId=" + categoryId + ")", e);
                 }
                 platform.info("DiscordBot.stop finished for categoryId=" + categoryId);
-            });
+            }
         } catch (Throwable e) {
             platform.error("Failed to stop bot (categoryId=" + categoryId + ")", e);
             platform.info("DiscordBot.stop finished for categoryId=" + categoryId);
@@ -319,12 +389,9 @@ public final class DiscordBot {
      * Safety: the class should be discarded after calling
      */
     public void free() {
-        platform.info("DiscordBot.free called for categoryId=" + categoryId);
         freed = true;
         stopDiscordAudioThread();
-        deleteDiscordVoiceChannelAsync();
         _free(ptr);
-        platform.info("DiscordBot.free finished for categoryId=" + categoryId);
     }
 
     private native void _addAudioToHearingBuffer(long ptr, byte[] groupIdBytes, byte[] rawOpusData, long sequenceNumber);
@@ -342,16 +409,31 @@ public final class DiscordBot {
             if (group == null) {
                 return;
             }
-            var bot = dev.amsam0.voicechatdiscord.GroupManager.groupBotMap.get(group.getId());
+            var bot = GroupManager.groupBotMap.get(group.getId());
             if (bot == null) {
                 return;
             }
+
+            Long channelId = bot.getDiscordChannelId();
+            boolean hasUsers = false;
+            if (channelId != null) {
+                for (var entry : GroupManager.discordUserChannelMap.entrySet()) {
+                    if (channelId.equals(entry.getValue())) {
+                        hasUsers = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasUsers) {
+                return;
+            }
+
             var sender = senderConn.getPlayer();
             if (sender == null) {
                 return;
             }
             var packet = event.getPacket();
-            if (!(packet instanceof de.maxhenkel.voicechat.api.packets.ConvertablePacket convertable)) {
+            if (!(packet instanceof ConvertablePacket convertable)) {
                 platform.warn("[handleGroupMicrophonePacketEvent] Packet is not convertable to StaticSoundPacket!");
                 return;
             }
@@ -398,5 +480,83 @@ public final class DiscordBot {
     
     private native Object _blockForSpeakingBufferOpusData(long ptr);
 
-    private native void _resetSenders(long ptr);
+    /**
+     * Disconnects the bot from the Discord voice channel, but does NOT delete the channel.
+     */
+    public void disconnect() {
+        try {
+            _disconnect(ptr);
+            platform.info("Disconnected Discord bot (categoryId=" + categoryId + ") from voice channel (without deleting). ");
+        } catch (Throwable e) {
+            platform.error("Failed to disconnect Discord bot (categoryId=" + categoryId + ")", e);
+        }
+    }
+
+    // Native method for disconnecting from the voice channel without deleting it
+    private native void _disconnect(long ptr);
+
+    /**
+     * Called from Rust when a Discord user's voice state changes (join/leave VC).
+     * @param discordUserId The Discord user ID (as a long)
+     * @param username The Discord username
+     * @param channelId The Discord channel ID (as a long), or 0 if leaving
+     * @param joined True if the user joined, false if left
+     */
+    public void onDiscordUserVoiceState(long discordUserId, String username, long channelId, boolean joined) {
+        if (Core.botUserIds != null && Core.botUserIds.contains(discordUserId)) {
+            return;
+        }
+
+        platform.info("[DiscordBot] User " + (joined ? "joined" : "left") + " Discord VC: " + username + " (ID: " + discordUserId + ") in channel " + channelId);
+
+        Long groupChannelId = channelId;
+        if (joined) {
+            // If already in the correct channel, skip (avoid duplicate join event)
+            Long existing = GroupManager.discordUserChannelMap.get(discordUserId);
+            if (existing != null && existing.equals(channelId)) {
+                platform.debug("[DiscordBot] User " + discordUserId + " already in channel " + channelId + ", skipping join event.");
+                return;
+            }
+            GroupManager.discordUserChannelMap.put(discordUserId, channelId);
+            GroupManager.discordUserNameMap.put(discordUserId, username);
+        } else {
+            // On leave, look up the last channel they were in
+            groupChannelId = GroupManager.discordUserChannelMap.remove(discordUserId);
+            GroupManager.discordUserNameMap.remove(discordUserId);
+            if (groupChannelId == null || groupChannelId == 0L) {
+                platform.info("[DiscordBot] No previous channel found for user " + discordUserId + ", cannot send leave message.");
+                return;
+            }
+        }
+
+        // Find the group whose Discord channel ID matches
+        UUID foundGroupId = null;
+        for (var entry : GroupManager.groupBotMap.entrySet()) {
+            DiscordBot bot = entry.getValue();
+            if (bot != null && bot.discordChannelId != null && bot.discordChannelId.equals(groupChannelId)) {
+                foundGroupId = entry.getKey();
+                break;
+            }
+        }
+        if (foundGroupId == null) {
+            platform.info("[DiscordBot] No group found for Discord channel ID " + groupChannelId);
+            return;
+        }
+
+        // Get all players in the group and send them a message
+        var players = GroupManager.groupPlayerMap.get(foundGroupId);
+        if (players == null || players.isEmpty()) {
+            platform.info("[DiscordBot] No players in group " + foundGroupId + " for Discord channel ID " + groupChannelId);
+            return;
+        }
+        // Compose a pretty message: [Discord] <username> joined/left the Discord voice channel.
+        Component prefix = Component.blue("[Discord] ");
+        Component name = Component.gold(username);
+        Component action = joined
+            ? Component.green(" joined the Discord voice channel.")
+            : Component.red(" left the Discord voice channel.");
+        for (var player : players) {
+            platform.sendMessage(player, prefix, name, action);
+        }
+    }
 }
