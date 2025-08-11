@@ -74,9 +74,10 @@ public final class Core {
             throw new RuntimeException(e);
         }
 
+
+        config.addDefault("category_id", "DISCORD_CATEGORY_ID_HERE");
         LinkedHashMap<String, String> defaultBot = new LinkedHashMap<>();
         defaultBot.put("token", "DISCORD_BOT_TOKEN_HERE");
-        defaultBot.put("vc_id", "VOICE_CHANNEL_ID_HERE");
         config.addDefault("bots", List.of(defaultBot));
 
         config.addDefault("debug_level", 0);
@@ -92,23 +93,32 @@ public final class Core {
 
         bots.clear();
 
+        Object categoryIdObj = config.get("category_id");
+        long categoryId;
+        if (categoryIdObj instanceof String) {
+            try {
+                categoryId = Long.parseLong((String) categoryIdObj);
+            } catch (NumberFormatException e) {
+                platform.error("category_id must be a valid Discord category ID (number as string)");
+                return;
+            }
+        } else if (categoryIdObj instanceof Number) {
+            categoryId = ((Number) categoryIdObj).longValue();
+        } else {
+            platform.error("category_id must be set in the config");
+            return;
+        }
+
         for (LinkedHashMap<String, Object> bot : (List<LinkedHashMap<String, Object>>) config.getList("bots")) {
             if (bot.get("token") == null) {
                 platform.error(
                         "Failed to load a bot, missing token property.");
                 continue;
             }
-
-            if (bot.get("vc_id") == null) {
-                platform.error(
-                        "Failed to load a bot, missing vc_id property.");
-                continue;
-            }
-
             try {
-                bots.add(new DiscordBot((String) bot.get("token"), (Long) bot.get("vc_id")));
+                bots.add(new DiscordBot((String) bot.get("token"), categoryId));
             } catch (ClassCastException e) {
-                platform.error("Failed to load a bot. Please make sure that the token property is a string and the vc_id property is a number.");
+                platform.error("Failed to load a bot. Please make sure that the token property is a string.");
             }
         }
 

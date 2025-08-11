@@ -15,8 +15,11 @@ public final class DiscordBot {
     private volatile boolean running = false;
     private volatile boolean freed = false;
     // Discord connection and bridging logic
-    public final long vcId;
+    private final long categoryId;
     private final long ptr;
+
+    // Store the Discord voice channel ID for this group
+    private volatile Long discordChannelId = null;
 
     /**
      * Send a list of Discord Opus audio packets to all group members in the specified group.
@@ -75,12 +78,77 @@ public final class DiscordBot {
         }
     }
 
-    private static native long _new(String token, long vcId);
+    private static native long _new(String token, long categoryId);
 
-    public DiscordBot(String token, long vcId) {
-        this.vcId = vcId;
-        ptr = _new(token, vcId);
+    public DiscordBot(String token, long categoryId) {
+        this.categoryId = categoryId;
+        ptr = _new(token, categoryId);
+        this.discordChannelId = null;
     }
+
+    /**
+     * Asynchronously creates a Discord voice channel for this group. Calls the callback with the channel ID (or null on failure).
+     * @param groupName The name for the new Discord voice channel
+     * @param callback Callback to receive the channel ID (or null)
+     */
+    public void createDiscordVoiceChannelAsync(String groupName, java.util.function.Consumer<Long> callback) {
+        if (freed) {
+            platform.warn("Attempted to create Discord channel after bot was freed");
+            callback.accept(null);
+            return;
+        }
+        new Thread(() -> {
+            try {
+                long channelId = _createDiscordVoiceChannel(ptr, groupName);
+                if (channelId != 0L) {
+                    this.discordChannelId = channelId;
+                    platform.info("Created Discord voice channel '" + groupName + "' with ID " + channelId);
+                    callback.accept(channelId);
+                } else {
+                    platform.error("Failed to create Discord voice channel for group '" + groupName + "'");
+                    callback.accept(null);
+                }
+            } catch (Throwable t) {
+                platform.error("Exception while creating Discord voice channel for group '" + groupName + "' (categoryId=" + categoryId + ")", t);
+                callback.accept(null);
+            }
+        }, "DiscordChannelCreateThread").start();
+    }
+
+    /**
+     * Deletes the Discord voice channel associated with this bot/group.
+     */
+    /**
+     * Asynchronously deletes the Discord voice channel associated with this bot/group.
+     */
+    public void deleteDiscordVoiceChannelAsync() {
+        if (freed) {
+            platform.warn("Attempted to delete Discord channel after bot was freed");
+            return;
+        }
+        final Long channelIdToDelete = discordChannelId;
+        if (channelIdToDelete == null) {
+            platform.warn("No Discord channel to delete for categoryId=" + categoryId);
+            return;
+        }
+        new Thread(() -> {
+            try {
+                _deleteDiscordVoiceChannel(ptr);
+                platform.info("Deleted Discord voice channel with ID " + channelIdToDelete + " for categoryId=" + categoryId);
+            } catch (Throwable t) {
+                platform.error("Exception while deleting Discord voice channel with ID " + channelIdToDelete + " (categoryId=" + categoryId + ")", t);
+            } finally {
+                // Only clear if we deleted the same channel
+                if (discordChannelId != null && discordChannelId.equals(channelIdToDelete)) {
+                    discordChannelId = null;
+                }
+            }
+        }, "DiscordChannelDeleteThread").start();
+    }
+
+    // Native methods for channel management
+    private static native long _createDiscordVoiceChannel(long ptr, String groupName);
+    private static native void _deleteDiscordVoiceChannel(long ptr);
 
     /**
      * Starts the background thread for Discord audio bridging.
@@ -106,7 +174,7 @@ public final class DiscordBot {
                         platform.warn("Unexpected return type from _blockForSpeakingBufferOpusData: " + (result == null ? "null" : result.getClass()));
                     }
                 } catch (Throwable t) {
-                    platform.error("Error in Discord audio thread for bot vc_id=" + vcId, t);
+                    platform.error("Error in Discord audio thread for bot (categoryId=" + categoryId + ")", t);
                 }
             }
         }, "DiscordAudioBridgeThread");
@@ -128,13 +196,6 @@ public final class DiscordBot {
         }
     }
 
-    public void logInAndStart(UUID groupId) {
-        if (logIn()) {
-            start();
-            startDiscordAudioThread(groupId); // Start audio thread only after bot is ready
-        }
-    }
-
     private native boolean _isStarted(long ptr);
 
     public boolean isStarted() {
@@ -143,25 +204,25 @@ public final class DiscordBot {
 
     private native void _logIn(long ptr) throws Throwable;
 
-    private boolean logIn() {
+    public boolean logIn() {
         try {
             _logIn(ptr);
-            platform.debug("Logged into the bot with vc_id " + vcId);
+            platform.debug("Logged into the bot (categoryId=" + categoryId + ")");
             return true;
         } catch (Throwable e) {
-            platform.error("Failed to login to the bot with vc_id=" + vcId, e);
+            platform.error("Failed to login to the bot (categoryId=" + categoryId + ")", e);
             return false;
         }
     }
 
     private native String _start(long ptr) throws Throwable;
 
-    private void start() {
+    public void start() {
         try {
             String vcName = _start(ptr);
-            platform.info("Started voice chat for group in channel " + vcName + " with bot with vc_id=" + vcId);
+            platform.info("Started voice chat for group in channel " + vcName + " with bot (categoryId=" + categoryId + ")");
         } catch (Throwable e) {
-            platform.error("Failed to start voice connection for bot with vc_id=" + vcId, e);
+            platform.error("Failed to start voice connection for bot (categoryId=" + categoryId + ")", e);
         }
     }
 
@@ -170,11 +231,13 @@ public final class DiscordBot {
     public void stop() {
         try {
             stopDiscordAudioThread();
+            // Delete the Discord voice channel if it exists (async)
+            deleteDiscordVoiceChannelAsync();
             _stop(ptr);
         } catch (Throwable e) {
-            platform.error("Failed to stop bot with vc_id=" + vcId, e);
+            platform.error("Failed to stop bot (categoryId=" + categoryId + ")", e);
         }
-        platform.info("DiscordBot.stop finished for vc_id=" + vcId);
+    platform.info("DiscordBot.stop finished for categoryId=" + categoryId);
     }
 
     private native void _free(long ptr);
@@ -183,11 +246,12 @@ public final class DiscordBot {
      * Safety: the class should be discarded after calling
      */
     public void free() {
-        platform.info("DiscordBot.free called for vc_id=" + vcId);
+    platform.info("DiscordBot.free called for categoryId=" + categoryId);
         freed = true;
         stopDiscordAudioThread();
+        deleteDiscordVoiceChannelAsync();
         _free(ptr);
-        platform.info("DiscordBot.free finished for vc_id=" + vcId);
+    platform.info("DiscordBot.free finished for categoryId=" + categoryId);
     }
 
     private native void _addAudioToHearingBuffer(long ptr, byte[] groupIdBytes, byte[] rawOpusData, long sequenceNumber);

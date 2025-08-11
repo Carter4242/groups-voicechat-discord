@@ -12,7 +12,7 @@ use super::State;
 
 impl super::DiscordBot {
     /// Returns the voice channel name
-    #[tracing::instrument(skip(bot), fields(bot_vc_id = %bot.vc_id))]
+    #[tracing::instrument(skip(bot), fields(bot_channel_id = ?bot.channel_id))]
     pub fn start(bot: Arc<super::DiscordBot>) -> Result<String, Report> {
         let mut state_lock = bot.state.write();
 
@@ -27,8 +27,11 @@ impl super::DiscordBot {
         // In case there are any packets left over
         bot.discord_to_mc_buffer.received_audio_rx.drain();
 
+
+        let channel_id = *bot.channel_id.lock();
+        let channel_id = channel_id.ok_or_else(|| eyre!("No channel_id set for this bot instance"))?;
         let channel = match RUNTIME
-            .block_on(http.get_channel(bot.vc_id))
+            .block_on(http.get_channel(channel_id))
             .wrap_err("Couldn't get voice channel")?
         {
             Channel::Guild(c) if c.kind == ChannelType::Voice => c,
@@ -36,14 +39,13 @@ impl super::DiscordBot {
         };
 
         let songbird = bot.songbird.clone();
-        let vc_id = bot.vc_id;
         let guild_id = channel.guild_id;
         let player_to_discord_buffers = Arc::clone(&bot.player_to_discord_buffers);
         let bot_for_async = Arc::clone(&bot);
         {
             if let Err(e) = RUNTIME.block_on(async move {
                 let call_lock = songbird
-                    .join(guild_id, vc_id)
+                    .join(guild_id, channel_id)
                     .await
                     .wrap_err("Unable to join call")?;
                 let mut call = call_lock.lock().await;
@@ -62,7 +64,7 @@ impl super::DiscordBot {
                 call.add_global_event(
                     CoreEvent::VoiceTick.into(),
                     VoiceHandler {
-                        vc_id,
+                        vc_id: channel_id,
                         bot: Arc::clone(&bot_for_async),
                     },
                 );

@@ -126,19 +126,33 @@ public final class GroupManager {
             }
             if (found == null) {
                 platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")! All bots are started or already assigned.\n" +
-                    "Bot status: " + Core.bots.stream().map(b -> "vc_id=" + b.vcId + ", started=" + b.isStarted() + ", assigned=" + groupBotMap.containsValue(b)).toList());
+                    "Bot status: " + Core.bots.stream().map(b -> "started=" + b.isStarted() + ", assigned=" + groupBotMap.containsValue(b)).toList());
                 return;
             }
             final DiscordBot bot = found;
-            new Thread(() -> bot.logInAndStart(groupId), "voicechat-discord: Bot AutoStart for Group").start();
-            groupBotMap.put(groupId, bot);
-            platform.info("Linked groupId " + groupId + " (" + group.getName() + ") to bot vc_id=" + bot.vcId);
+            // Log in the bot first, then create the Discord voice channel, then start
+            new Thread(() -> {
+                if (bot.logIn()) {
+                    bot.createDiscordVoiceChannelAsync(group.getName(), discordChannelId -> {
+                        if (discordChannelId == null) {
+                            platform.error("Failed to create Discord voice channel for group " + group.getName() + " (" + groupId + ")");
+                            return;
+                        }
+                        bot.start();
+                        bot.startDiscordAudioThread(groupId);
+                        groupBotMap.put(groupId, bot);
+                        platform.info("Linked groupId " + groupId + " (" + group.getName() + ") to bot (discordChannelId=" + discordChannelId + ")");
 
-            platform.info(player.getUuid() + " (" + platform.getName(player) + ") created " + groupId + " (" + group.getName() + ")");
+                        platform.info(player.getUuid() + " (" + platform.getName(player) + ") created " + groupId + " (" + group.getName() + ")");
 
-            List<ServerPlayer> players = getPlayers(group);
-            players.add(player);
-            createStaticAudioChannelIfFirstGroup(group, player, connection);
+                        List<ServerPlayer> players = getPlayers(group);
+                        players.add(player);
+                        createStaticAudioChannelIfFirstGroup(group, player, connection);
+                    });
+                } else {
+                    platform.error("Failed to login to Discord for group " + group.getName() + " (" + groupId + ")");
+                }
+            }, "voicechat-discord: Bot AutoStart for Group").start();
         } else {
             platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")");
         }
@@ -153,9 +167,9 @@ public final class GroupManager {
 
         DiscordBot bot = groupBotMap.remove(groupId);
         if (bot != null) {
-            platform.info("onGroupRemoved: Stopping Discord bot for group: " + group.getName() + " (vc_id=" + bot.vcId + ")");
+            platform.info("onGroupRemoved: Stopping Discord bot for group: " + group.getName() + ")");
             bot.stop();
-            platform.info("onGroupRemoved: Stopped Discord bot for group: " + group.getName() + " (vc_id=" + bot.vcId + ")");
+            platform.info("onGroupRemoved: Stopped Discord bot for group: " + group.getName() + ")");
         }
 
         groupAudioChannels.remove(groupId);

@@ -18,7 +18,7 @@ use crate::runtime::RUNTIME;
 use super::State;
 
 impl super::DiscordBot {
-    #[tracing::instrument(skip(self), fields(self.vc_id = %self.vc_id))]
+    #[tracing::instrument(skip(self), fields(self.category_id = %self.category_id, self.channel_id = ?self.channel_id))]
     pub fn log_in(&self) -> Result<(), Report> {
         let mut state_lock = self.state.write();
 

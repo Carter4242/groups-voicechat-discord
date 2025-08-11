@@ -44,7 +44,8 @@ pub struct PlayerToDiscordBuffer {
 
 struct DiscordBot {
     token: String,
-    pub vc_id: ChannelId,
+    pub category_id: ChannelId, // The Discord category where channels are created
+    pub channel_id: parking_lot::Mutex<Option<ChannelId>>, // The managed voice channel (created dynamically)
     songbird: Arc<Songbird>,
     state: RwLock<State>,
     client_task: Mutex<Option<AbortHandle>>,
@@ -67,17 +68,18 @@ enum State {
 }
 
 impl DiscordBot {
-    pub fn new(token: String, vc_id: ChannelId) -> DiscordBot {
+    pub fn new(token: String, category_id: ChannelId) -> DiscordBot {
         let (received_audio_tx, received_audio_rx) = flume::bounded(MAX_AUDIO_BUFFER);
         DiscordBot {
             token,
-            vc_id,
+            category_id,
+            channel_id: parking_lot::Mutex::new(None),
             songbird: {
                 use std::num::NonZeroUsize;
                 let songbird_config = Config::default()
                     .decode_mode(DecodeMode::Decrypt)
-                    .playout_buffer_length(NonZeroUsize::new(8).unwrap()) // 5 packets = 100ms
-                    .playout_spike_length(3); // 3 extra packets for bursts
+                    .playout_buffer_length(NonZeroUsize::new(7).unwrap())
+                    .playout_spike_length(3);
                 Songbird::serenity_from_config(songbird_config)
             },
             state: RwLock::new(State::NotLoggedIn),
@@ -90,9 +92,52 @@ impl DiscordBot {
         }
     }
 
+    /// Asynchronously create a Discord voice channel in the configured category.
+    pub async fn create_voice_channel(&self, http: &Arc<Http>, group_name: &str) -> Result<ChannelId, Report> {
+        use serenity::all::ChannelType;
+        use serenity::builder::CreateChannel as CreateChannelBuilder;
+
+        // Get the parent category's guild ID
+        let category_id = self.category_id;
+        let category_channel = category_id.to_channel(http).await?;
+        let guild_id = match category_channel.guild() {
+            Some(guild_channel) => guild_channel.guild_id,
+            None => return Err(eyre::eyre!("Category ID is not a guild channel")),
+        };
+
+        // Create the voice channel in the category
+        let builder = CreateChannelBuilder::new(group_name)
+            .kind(ChannelType::Voice)
+            .category(category_id);
+        let channel = guild_id.create_channel(http.as_ref(), builder).await?;
+        let new_channel_id = channel.id;
+        info!("Created Discord voice channel '{}' with ID {} in category {}", group_name, new_channel_id, category_id);
+        *self.channel_id.lock() = Some(new_channel_id);
+        Ok(new_channel_id)
+    }
+
+    /// Asynchronously delete the managed Discord voice channel, if it exists.
+    pub async fn delete_voice_channel(&self, http: &Arc<Http>) -> Result<(), Report> {
+        let mut channel_id_lock = self.channel_id.lock();
+        if let Some(channel_id) = *channel_id_lock {
+            match channel_id.delete(http.as_ref()).await {
+                Ok(_) => {
+                    info!("Deleted Discord voice channel with ID {}", channel_id);
+                    *channel_id_lock = None;
+                },
+                Err(e) => {
+                    warn!(?e, "Failed to delete Discord voice channel with ID {}", channel_id);
+                }
+            }
+        } else {
+            warn!("No Discord channel to delete");
+        }
+        Ok(())
+    }
 
 
-    #[tracing::instrument(skip(self), fields(self.vc_id = %self.vc_id))]
+
+    #[tracing::instrument(skip(self), fields(self.category_id = %self.category_id, self.channel_id = ?self.channel_id))]
     fn disconnect(&self, guild_id: GuildId) {
         let mut tries = 0;
         loop {
@@ -113,7 +158,7 @@ impl DiscordBot {
         }
     }
 
-    #[tracing::instrument(skip(self), fields(self.vc_id = %self.vc_id))]
+    #[tracing::instrument(skip(self), fields(self.category_id = %self.category_id, self.channel_id = ?self.channel_id))]
     pub fn stop(&self) -> Result<(), Report> {
         let mut state_lock = self.state.write();
         let State::Started { http, guild_id } = &*state_lock else {
@@ -167,9 +212,9 @@ impl DiscordBot {
 }
 
 impl Drop for DiscordBot {
-    #[tracing::instrument(skip(self), fields(self.vc_id = %self.vc_id))]
+    #[tracing::instrument(skip(self), fields(self.category_id = %self.category_id, self.channel_id = ?self.channel_id))]
     fn drop(&mut self) {
-        info!("DiscordBot::drop called for vc_id={}", self.vc_id);
+        info!("DiscordBot::drop called for category_id={}, channel_id={:?}", self.category_id, self.channel_id);
         if let Some(client_task) = &*self.client_task.lock() {
             info!("Aborting client task");
             client_task.abort();

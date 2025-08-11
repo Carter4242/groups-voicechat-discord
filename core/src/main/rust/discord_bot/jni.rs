@@ -16,14 +16,14 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1new<'local>
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     token: JString<'local>,
-    vc_id: jlong,
+    category_id: jlong,
 ) -> jlong {
     let token = env
         .get_string(&token)
         .expect("Couldn't get java string! Please file a GitHub issue")
         .into();
 
-    let discord_bot = Arc::new(DiscordBot::new(token, ChannelId::new(vc_id as u64)));
+    let discord_bot = Arc::new(DiscordBot::new(token, ChannelId::new(category_id as u64)));
     Arc::into_raw(discord_bot) as jlong
 }
 
@@ -109,6 +109,89 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1free(
     ptr: jlong,
 ) {
     let _ = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+}
+
+// JNI: Create Discord voice channel for this bot instance
+#[no_mangle]
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1createDiscordVoiceChannel(
+    mut env: JNIEnv<'_>,
+    _obj: jobject,
+    ptr: jlong,
+    group_name: JString<'_>,
+) -> jlong {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let group_name: String = match env.get_string(&group_name) {
+            Ok(s) => s.into(),
+            Err(_) => {
+                tracing::error!("JNI: Could not get group_name string");
+                return 0;
+            }
+        };
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
+        let result = {
+            // Get HTTP client from state
+            let state = discord_bot.state.read();
+            let http = match &*state {
+                super::State::LoggedIn { http } | super::State::Started { http, .. } => http.clone(),
+                _ => {
+                    tracing::error!("JNI: Bot not logged in, cannot create channel");
+                    // Only safe to call into_raw after state is dropped
+                    drop(state);
+                    let _ = Arc::into_raw(discord_bot);
+                    return 0;
+                }
+            };
+            // SAFETY: We must not hold the lock across await
+            drop(state);
+            // Run async channel creation
+            match crate::runtime::RUNTIME.block_on(async {
+                discord_bot.create_voice_channel(&http, &group_name).await
+            }) {
+                Ok(channel_id) => channel_id.get() as jlong,
+                Err(e) => {
+                    tracing::error!(?e, "JNI: Failed to create Discord voice channel");
+                    0
+                }
+            }
+        };
+        // Only call into_raw after all borrows are done
+        let _ = Arc::into_raw(discord_bot);
+        result
+    }));
+    match result {
+        Ok(val) => val,
+        Err(_) => {
+            tracing::error!("Rust panic in createDiscordVoiceChannel JNI call");
+            0
+        }
+    }
+}
+
+// JNI: Delete Discord voice channel for this bot instance
+#[no_mangle]
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1deleteDiscordVoiceChannel(
+    _env: JNIEnv<'_>,
+    _obj: jobject,
+    ptr: jlong,
+) {
+    let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
+    let state = discord_bot.state.read();
+    let http = match &*state {
+        super::State::LoggedIn { http } | super::State::Started { http, .. } => http.clone(),
+        _ => {
+            tracing::error!("JNI: Bot not logged in, cannot delete channel");
+            // Only safe to call into_raw after state is dropped
+            drop(state);
+            let _ = Arc::into_raw(discord_bot);
+            return;
+        }
+    };
+    drop(state);
+    let _ = crate::runtime::RUNTIME.block_on(async {
+        discord_bot.delete_voice_channel(&http).await
+    });
+    // Only call into_raw after all borrows are done
+    let _ = Arc::into_raw(discord_bot);
 }
 
 #[no_mangle]
@@ -198,7 +281,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
 
     match rust_result {
         Ok(Ok(opus_packets)) => {
-            tracing::info!("JNI: Got Discord audio ({} packets) for vc_id={}", opus_packets.len(), ptr);
+            tracing::info!("JNI: Got Discord audio ({} packets) for bot ptr={:#x}", opus_packets.len(), ptr);
             let byte_array_class = env.find_class("[B").unwrap();
             let empty = env.new_byte_array(0).unwrap();
             let arr = env.new_object_array(opus_packets.len() as i32, byte_array_class, empty).unwrap();
