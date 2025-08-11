@@ -1,14 +1,30 @@
 package dev.amsam0.voicechatdiscord;
 
+import de.maxhenkel.voicechat.api.ServerPlayer;
+
 import com.mojang.brigadier.context.CommandContext;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import static dev.amsam0.voicechatdiscord.PaperPlugin.LOGGER;
+import static dev.amsam0.voicechatdiscord.Core.api;
 import static dev.amsam0.voicechatdiscord.PaperPlugin.commandHelper;
 
 public class PaperPlatform implements Platform {
+    @Override
+    public void sendActionBar(de.maxhenkel.voicechat.api.Player player, Component... message) {
+        var bukkitPlayer = (org.bukkit.entity.Player) player.getPlayer();
+        if (bukkitPlayer != null && message != null && message.length > 0) {
+            bukkitPlayer.sendActionBar(toNative(message));
+        }
+    }
+
+    @Override
+    public ServerPlayer commandContextToPlayer(CommandContext<?> context) {
+        return api.fromServerPlayer(commandHelper.bukkitEntity(context));
+    }
+
     @Override
     public boolean isOperator(CommandContext<?> sender) {
         return commandHelper.bukkitSender(sender).isOp();
@@ -48,6 +64,8 @@ public class PaperPlatform implements Platform {
                         case RED -> NamedTextColor.RED;
                         case YELLOW -> NamedTextColor.YELLOW;
                         case GREEN -> NamedTextColor.GREEN;
+                        case GOLD -> NamedTextColor.GOLD;
+                        case BLUE -> NamedTextColor.BLUE;
                     }
             );
             if (nativeComponent == null) {

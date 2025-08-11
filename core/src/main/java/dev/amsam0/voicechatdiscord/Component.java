@@ -6,6 +6,8 @@ public record Component(Color color, String text) {
         RED,
         YELLOW,
         GREEN,
+        GOLD,
+        BLUE,
     }
 
     public static Component white(String text) {
@@ -22,5 +24,13 @@ public record Component(Color color, String text) {
 
     public static Component green(String text) {
         return new Component(Color.GREEN, text);
+    }
+
+    public static Component gold(String text) {
+        return new Component(Color.GOLD, text);
+    }
+
+    public static Component blue(String text) {
+        return new Component(Color.BLUE, text);
     }
 }

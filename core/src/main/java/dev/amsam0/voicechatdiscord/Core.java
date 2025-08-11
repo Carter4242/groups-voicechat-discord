@@ -7,15 +7,18 @@ import org.bspfsystems.yamlconfiguration.file.YamlConfiguration;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
 
-import static dev.amsam0.voicechatdiscord.Constants.CONFIG_HEADER;
 
 /**
  * Core code between Paper.
  */
 public final class Core {
+    // Set of Discord user IDs (as Long) that are bots and should be ignored for join/leave
+    public static final Set<Long> botUserIds = new HashSet<>();
     public static VoicechatServerApi api; // Initiated by VoicechatPlugin
     public static Platform platform; // Initiated upon startup by platform
 
@@ -57,12 +60,44 @@ public final class Core {
         }
     }
 
-    @SuppressWarnings({"DataFlowIssue", "unchecked", "ResultOfMethodCallIgnored"})
+    @SuppressWarnings({"DataFlowIssue", "ResultOfMethodCallIgnored"})
     public static void loadConfig() {
-        File configFile = new File(platform.getConfigPath());
 
+        File configFile = new File(platform.getConfigPath());
         if (!configFile.getParentFile().exists())
             configFile.getParentFile().mkdirs();
+
+        // Write a hand-crafted default config with interspersed comments if it doesn't exist
+        if (!configFile.exists()) {
+            String defaultConfig = String.join(System.lineSeparator(),
+                "# The Discord category ID where voice channels will be created.",
+                "category_id: DISCORD_CATEGORY_ID_HERE",
+                "",
+                "# The list of Discord bot tokens to use for bridging.",
+                "# Each token should be on its own line, starting with a dash.",
+                "bot_tokens:",
+                "  - DISCORD_BOT_TOKEN_HERE",
+                "",
+                "# List of Discord user IDs (as numbers) that are bots and should be ignored for join/leave messages.",
+                "# Add each bot user ID on its own line, starting with a dash.",
+                "bot_user_ids:",
+                "  - DISCORD_BOT_USER_ID_HERE",
+                "",
+                "# Debug logging level:",
+                "# 0 (or lower): No debug logging",
+                "# 1: Some debug logging (helpful, not spammy)",
+                "# 2: Most debug logging (can be spammy)",
+                "# 3 (or higher): All debug logging (very spammy)",
+                "debug_level: 0",
+                ""
+            );
+            try (java.io.FileWriter writer = new java.io.FileWriter(configFile)) {
+                writer.write(defaultConfig);
+            } catch (IOException e) {
+                platform.error("Failed to write default config file: " + e);
+                throw new RuntimeException(e);
+            }
+        }
 
         YamlConfiguration config = new YamlConfiguration();
         try {
@@ -74,24 +109,22 @@ public final class Core {
             throw new RuntimeException(e);
         }
 
-
-        config.addDefault("category_id", "DISCORD_CATEGORY_ID_HERE");
-        LinkedHashMap<String, String> defaultBot = new LinkedHashMap<>();
-        defaultBot.put("token", "DISCORD_BOT_TOKEN_HERE");
-        config.addDefault("bots", List.of(defaultBot));
-
-        config.addDefault("debug_level", 0);
-
-        config.getOptions().setCopyDefaults(true);
-        config.getOptions().setHeader(CONFIG_HEADER);
-        try {
-            config.save(configFile);
-        } catch (IOException e) {
-            platform.error("Failed to save config file: " + e);
-            throw new RuntimeException(e);
-        }
-
         bots.clear();
+
+        // Load bot_user_ids from config
+        botUserIds.clear();
+        Object botUserIdsObj = config.getList("bot_user_ids");
+        if (botUserIdsObj instanceof List<?> list) {
+            for (Object idObj : list) {
+                if (idObj instanceof Number n) {
+                    botUserIds.add(n.longValue());
+                } else if (idObj instanceof String s) {
+                    try {
+                        botUserIds.add(Long.parseLong(s));
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+        }
 
         Object categoryIdObj = config.get("category_id");
         long categoryId;
@@ -109,16 +142,16 @@ public final class Core {
             return;
         }
 
-        for (LinkedHashMap<String, Object> bot : (List<LinkedHashMap<String, Object>>) config.getList("bots")) {
-            if (bot.get("token") == null) {
-                platform.error(
-                        "Failed to load a bot, missing token property.");
-                continue;
-            }
-            try {
-                bots.add(new DiscordBot((String) bot.get("token"), categoryId));
-            } catch (ClassCastException e) {
-                platform.error("Failed to load a bot. Please make sure that the token property is a string.");
+        Object botTokensObj = config.getList("bot_tokens");
+        if (botTokensObj instanceof List<?> botTokensList) {
+            for (Object entry : botTokensList) {
+                if (entry instanceof String tokenStr) {
+                    bots.add(new DiscordBot(tokenStr, categoryId));
+                } else if (entry instanceof LinkedHashMap<?,?> map && map.get("token") instanceof String token) {
+                    bots.add(new DiscordBot(token, categoryId));
+                } else {
+                    platform.error("Invalid bot_tokens entry: " + entry);
+                }
             }
         }
 
@@ -139,9 +172,9 @@ public final class Core {
             discordBot.free();
         });
         bots.clear();
-        // Also clear all group mappings when bots are cleared
-        dev.amsam0.voicechatdiscord.GroupManager.groupPlayerMap.clear();
-        dev.amsam0.voicechatdiscord.GroupManager.groupBotMap.clear();
-        dev.amsam0.voicechatdiscord.GroupManager.groupAudioChannels.clear();
+
+        GroupManager.groupPlayerMap.clear();
+        GroupManager.groupBotMap.clear();
+        GroupManager.groupAudioChannels.clear();
     }
 }
