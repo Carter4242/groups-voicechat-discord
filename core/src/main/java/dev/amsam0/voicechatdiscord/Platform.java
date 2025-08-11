@@ -2,24 +2,11 @@ package dev.amsam0.voicechatdiscord;
 
 import com.mojang.brigadier.context.CommandContext;
 import de.maxhenkel.voicechat.api.Player;
-import de.maxhenkel.voicechat.api.Position;
-import de.maxhenkel.voicechat.api.ServerLevel;
-import de.maxhenkel.voicechat.api.ServerPlayer;
-import org.jetbrains.annotations.Nullable;
-
-import java.util.UUID;
-import java.util.function.Consumer;
 
 import static dev.amsam0.voicechatdiscord.Core.debugLevel;
 
 public interface Platform {
-    @Nullable Position getEntityPosition(ServerLevel level, UUID uuid);
-
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
-    boolean isValidPlayer(CommandContext<?> sender);
-
-    ServerPlayer commandContextToPlayer(CommandContext<?> context);
-
     boolean isOperator(CommandContext<?> sender);
 
     boolean hasPermission(CommandContext<?> sender, String permission);
@@ -29,10 +16,6 @@ public interface Platform {
     void sendMessage(Player player, Component... message);
 
     String getName(Player player);
-
-    void setOnPlayerLeaveHandler(Consumer<UUID> handler);
-
-    @Nullable String getSimpleVoiceChatVersion();
 
     String getConfigPath();
 

@@ -23,10 +23,10 @@ public final class LibraryLoader {
         return OS_NAME.contains("win");
     }
 
-
     private static boolean isLinux() {
         return OS_NAME.contains("nux");
     }
+    
 
     private static String getPlatform() throws Exception {
         if (isWindows()) {

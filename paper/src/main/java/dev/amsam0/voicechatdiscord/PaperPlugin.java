@@ -4,7 +4,6 @@ import de.maxhenkel.voicechat.api.BukkitVoicechatService;
 import dev.amsam0.voicechatdiscord.post_1_20_6.Post_1_20_6_CommandHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import static dev.amsam0.voicechatdiscord.Constants.PLUGIN_ID;
@@ -15,7 +14,6 @@ public final class PaperPlugin extends JavaPlugin {
     public static PaperPlugin INSTANCE;
     public static CommandHelper commandHelper;
 
-    private final EventListener eventListener = new EventListener();
     private PaperVoicechatPlugin voicechatPlugin;
 
     public static PaperPlugin get() {
@@ -43,8 +41,6 @@ public final class PaperPlugin extends JavaPlugin {
         }
 
         enable();
-
-        Bukkit.getPluginManager().registerEvents(eventListener, this);
 
         commandHelper.registerCommands();
     }
