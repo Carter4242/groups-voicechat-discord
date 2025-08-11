@@ -2,6 +2,7 @@
 
 pluginVersion="3.0.11"
 fabricLoaderVersion="0.16.13"
+export RUST_BACKTRACE="full"
 
 minecraftVersion="$2"
 platform="$1"

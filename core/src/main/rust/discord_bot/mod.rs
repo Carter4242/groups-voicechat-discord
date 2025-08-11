@@ -1,10 +1,10 @@
 use std::{
     sync::Arc,
-    thread,
     time::Duration,
 };
 
 use dashmap::DashMap;
+use futures_util::FutureExt;
 use uuid::Uuid;
 use eyre::{Report};
 use parking_lot::{Mutex, RwLock};
@@ -19,7 +19,6 @@ use tokio::task::AbortHandle;
 use tracing::{info, warn};
 
 use crate::audio_util::MAX_AUDIO_BUFFER;
-use crate::runtime::RUNTIME;
 
 mod discord_receive;
 mod discord_speak;
@@ -121,62 +120,167 @@ impl DiscordBot {
     }
 
     /// Asynchronously delete the managed Discord voice channel, if it exists.
-    pub async fn delete_voice_channel(&self, http: &Arc<Http>) -> Result<(), Report> {
-        let mut channel_id_lock = self.channel_id.lock();
-        if let Some(channel_id) = *channel_id_lock {
-            match channel_id.delete(http.as_ref()).await {
-                Ok(_) => {
-                    info!("Deleted Discord voice channel with ID {}", channel_id);
-                    *channel_id_lock = None;
-                },
-                Err(e) => {
-                    warn!(?e, "Failed to delete Discord voice channel with ID {}", channel_id);
+    pub async fn delete_voice_channel(&self, http: &Arc<Http>, guild_id: Option<GuildId>) -> Result<(), Report> {
+        let result = std::panic::AssertUnwindSafe(async {
+            info!("Rust: delete_voice_channel called (guild_id={:?})", guild_id);
+            // Copy out the channel_id, then drop the lock before awaiting
+            let channel_id_opt = {
+                let channel_id_lock = self.channel_id.lock();
+                let channel_id = *channel_id_lock;
+                channel_id
+            };
+            if let Some(channel_id) = channel_id_opt {
+                use tokio::time::timeout;
+                use std::time::Duration;
+                info!("Rust: Attempting to delete Discord voice channel with ID {}", channel_id);
+                // If we are in a call in this guild, disconnect first
+                if let Some(guild_id) = guild_id {
+                    info!("Rust: Disconnecting from guild_id {} before deleting channel", guild_id);
+                    self.disconnect(guild_id).await;
                 }
+                info!("Rust: About to await channel_id.delete for channel {} (with 1.5s timeout)", channel_id);
+                let delete_result = timeout(Duration::from_millis(1500), std::panic::AssertUnwindSafe(channel_id.delete(http.as_ref())).catch_unwind()).await;
+                match delete_result {
+                    Ok(inner) => {
+                        info!("Rust: Finished awaiting channel_id.delete for channel {} (result: {:?})", channel_id, inner.as_ref().map(|r| r.as_ref().map(|_| "Ok").unwrap_or("Err")).unwrap_or("Panic"));
+                        match inner {
+                            Ok(Ok(_)) => {
+                                info!("Deleted Discord voice channel with ID {}", channel_id);
+                                // Set to None after successful deletion
+                                let mut channel_id_lock = self.channel_id.lock();
+                                *channel_id_lock = None;
+                            },
+                            Ok(Err(e)) => {
+                                warn!(?e, "Failed to delete Discord voice channel with ID {}", channel_id);
+                            },
+                            Err(_) => {
+                                warn!("Panic occurred while deleting Discord voice channel with ID {}", channel_id);
+                            }
+                        }
+                    },
+                    Err(_) => {
+                        warn!("Timeout (1.5s) while deleting Discord voice channel with ID {}", channel_id);
+                    }
+                }
+            } else {
+                warn!("Rust: No Discord channel to delete");
             }
-        } else {
-            warn!("No Discord channel to delete");
+            Ok(())
+        }).catch_unwind().await;
+        match result {
+            Ok(r) => r,
+            Err(_) => {
+                warn!("Caught panic in delete_voice_channel (likely due to runtime shutdown or FFI error)");
+                Ok(())
+            }
         }
-        Ok(())
     }
 
     /// Asynchronously update the managed Discord voice channel's name, if it exists.
     pub async fn update_voice_channel_name(&self, http: &Arc<Http>, new_name: &str) -> Result<(), Report> {
-        let channel_id_lock = self.channel_id.lock();
-        if let Some(channel_id) = channel_id_lock.as_ref() {
-            let builder = serenity::builder::EditChannel::new().name(new_name);
-            match channel_id.edit(http.as_ref(), builder).await {
-                Ok(_) => {
-                    info!("Updated Discord voice channel name to '{}' for channel {}", new_name, channel_id);
-                },
-                Err(e) => {
-                    warn!(?e, "Failed to update Discord voice channel name for channel {}", channel_id);
+        let result = std::panic::AssertUnwindSafe(async {
+            use tokio::time::timeout;
+            use std::time::Duration;
+            // Copy out the channel_id, then drop the lock before awaiting
+            let channel_id_opt = {
+                let channel_id_lock = self.channel_id.lock();
+                channel_id_lock.clone()
+            };
+            info!("update_voice_channel_name: called with new_name='{}', channel_id_opt={:?}", new_name, channel_id_opt);
+            if let Some(channel_id) = channel_id_opt {
+                let builder = serenity::builder::EditChannel::new().name(new_name);
+                info!("update_voice_channel_name: attempting to edit channel {} with new name '{}' (with 1.5s timeout)", channel_id, new_name);
+                let edit_result = timeout(Duration::from_millis(1500), channel_id.edit(http.as_ref(), builder)).await;
+                match edit_result {
+                    Ok(Ok(_)) => {
+                        info!("Updated Discord voice channel name to '{}' for channel {}", new_name, channel_id);
+                    },
+                    Ok(Err(e)) => {
+                        warn!(?e, "Failed to update Discord voice channel name for channel {} (new_name='{}')", channel_id, new_name);
+                    },
+                    Err(_) => {
+                        warn!("Timeout (1.5s) while updating Discord voice channel name for channel {} (new_name='{}')", channel_id, new_name);
+                    }
                 }
+            } else {
+                warn!("No Discord channel to update name (new_name='{}')", new_name);
             }
-        } else {
-            warn!("No Discord channel to update name");
+            Ok(())
+        }).catch_unwind().await;
+        match result {
+            Ok(r) => r,
+            Err(_) => {
+                warn!("Caught panic in update_voice_channel_name (likely due to runtime shutdown)");
+                Ok(())
+            }
         }
-        Ok(())
+    }
+
+    /// Send a text message to the managed Discord voice channel's text chat.
+    pub async fn send_text_message(&self, message: &str) -> Result<(), Report> {
+        let result = std::panic::AssertUnwindSafe(async {
+            let state = self.state.read();
+            let http = match &*state {
+                State::LoggedIn { http } | State::Started { http, .. } => http.clone(),
+                _ => {
+                    warn!("send_text_message: Bot not logged in");
+                    return Err(eyre::eyre!("Bot not logged in"));
+                }
+            };
+            // Copy out the channel_id, then drop the lock before awaiting
+            let channel_id_opt = {
+                let channel_id_lock = self.channel_id.lock();
+                *channel_id_lock
+            };
+            let channel_id = match channel_id_opt {
+                Some(id) => id,
+                None => {
+                    warn!("send_text_message: No Discord channel to send text message");
+                    return Err(eyre::eyre!("No Discord channel to send text message"));
+                }
+            };
+            drop(state);
+            use serenity::builder::CreateMessage;
+            let msg = CreateMessage::new().content(message);
+            channel_id.send_message(http.as_ref(), msg).await?;
+            Ok(())
+        }).catch_unwind().await;
+        match result {
+            Ok(r) => r,
+            Err(_) => {
+                warn!("Caught panic in send_text_message (likely due to runtime shutdown)");
+                Ok(())
+            }
+        }
     }
 
 
-
     #[tracing::instrument(skip(self), fields(self.category_id = %self.category_id, self.channel_id = ?self.channel_id))]
-    fn disconnect(&self, guild_id: GuildId) {
+    pub async fn disconnect(&self, guild_id: GuildId) {
         let mut tries = 0;
         loop {
-            if let Err(error) = RUNTIME.block_on(self.songbird.remove(guild_id)) {
-                warn!(?error, "Failed to disconnect from the call: {error}");
-                tries += 1;
-            } else {
-                info!("Successfully disconnected from call");
-                break;
-            }
-            if tries < 5 {
-                info!("Trying to disconnect again in 500 milliseconds");
-                thread::sleep(Duration::from_millis(500));
-            } else {
-                warn!("Giving up on call disconnection");
-                break;
+            match self.songbird.remove(guild_id).await {
+                Ok(_) => {
+                    info!("Successfully disconnected from call");
+                    break;
+                },
+                Err(error) => {
+                    // Check for NoCall error
+                    let error_str = format!("{}", error);
+                    warn!(?error, "Failed to disconnect from the call: {error}");
+                    if error_str.contains("NoCall") {
+                        info!("Disconnect error is NoCall; treating as success and not retrying");
+                        break;
+                    }
+                    tries += 1;
+                    if tries < 5 {
+                        info!("Trying to disconnect again in 500 milliseconds");
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    } else {
+                        warn!("Giving up on call disconnection");
+                        break;
+                    }
+                }
             }
         }
     }
@@ -184,13 +288,16 @@ impl DiscordBot {
     #[tracing::instrument(skip(self), fields(self.category_id = %self.category_id, self.channel_id = ?self.channel_id))]
     pub fn stop(&self) -> Result<(), Report> {
         let mut state_lock = self.state.write();
-        let State::Started { http, guild_id } = &*state_lock else {
+        let State::Started { .. } = &*state_lock else {
             info!("Bot is not started");
             return Ok(());
         };
+        info!("Stopping DiscordBot: transitioning from Started to LoggedIn, setting audio_shutdown to true");
         self.audio_shutdown.store(true, Ordering::SeqCst);
-        self.disconnect(*guild_id);
-        *state_lock = State::LoggedIn { http: http.clone() };
+        *state_lock = match &*state_lock {
+            State::Started { http, .. } => State::LoggedIn { http: http.clone() },
+            _ => unreachable!(),
+        };
         Ok(())
     }
 

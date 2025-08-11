@@ -76,7 +76,7 @@ impl super::DiscordBot {
 
                 eyre::Ok(())
             }) {
-                bot.disconnect(guild_id);
+                RUNTIME.block_on(bot.disconnect(guild_id));
                 return Err(e);
             }
         }

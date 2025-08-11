@@ -116,8 +116,8 @@ impl io::Read for PlayerAudioSource {
                 self.next_frame_time = Some(std::time::Instant::now() + FRAME_DURATION);
             }
             let mut written = 0;
-            let mut frames_returned = 0;
-            let mut frames_skipped = 0;
+            let mut _frames_returned = 0;
+            let mut _frames_skipped = 0;
             for _ in 0..frames {
                 let mut all_samples = Vec::new();
                 let mut user_pcm: HashMap<Uuid, [i16; 960]> = HashMap::new();
@@ -190,10 +190,10 @@ impl io::Read for PlayerAudioSource {
                 }
                 if !any_real_audio {
                     // All users missing/filling, skip this frame
-                    frames_skipped += 1;
+                    _frames_skipped += 1;
                     continue;
                 }
-                frames_returned += 1;
+                _frames_returned += 1;
 
                 let combined = crate::audio_util::combine_audio_parts(all_samples);
 
@@ -202,7 +202,7 @@ impl io::Read for PlayerAudioSource {
                     written += buf.write(&converted.to_le_bytes())?;
                 }
             }
-            tracing::info!("PlayerAudioSource::read: returned {} frames, skipped {} frames (all missing)", frames_returned, frames_skipped);
+            //tracing::info!("PlayerAudioSource::read: returned {} frames, skipped {} frames (all missing)", _frames_returned, _frames_skipped);
             if written == 0 {
                 // If we just failed to send frames, only return 1 frame next time
                 self.prev_zero = true;

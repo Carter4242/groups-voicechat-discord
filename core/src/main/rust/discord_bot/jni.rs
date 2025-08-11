@@ -174,6 +174,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1deleteDisco
     _obj: jobject,
     ptr: jlong,
 ) {
+    tracing::info!("JNI: Java_dev_amsam0_voicechatdiscord_DiscordBot__1deleteDiscordVoiceChannel called for ptr={:#x}", ptr);
     let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
     let state = discord_bot.state.read();
     let http = match &*state {
@@ -187,9 +188,19 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1deleteDisco
         }
     };
     drop(state);
+    // Try to get guild_id from bot state if available
+    let guild_id = {
+        let state = discord_bot.state.read();
+        match &*state {
+            super::State::Started { guild_id, .. } => Some(*guild_id),
+            _ => None,
+        }
+    };
+    tracing::info!("JNI: Calling Rust delete_voice_channel with guild_id={:?}", guild_id);
     let _ = crate::runtime::RUNTIME.block_on(async {
-        discord_bot.delete_voice_channel(&http).await
+        discord_bot.delete_voice_channel(&http, guild_id).await
     });
+    tracing::info!("JNI: Rust delete_voice_channel finished with with guild_id={:?}", guild_id);
     // Only call into_raw after all borrows are done
     let _ = Arc::into_raw(discord_bot);
 }
@@ -229,6 +240,36 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1updateDisco
     }));
     if result.is_err() {
         tracing::error!("Rust panic in updateDiscordVoiceChannelName JNI call");
+    }
+}
+
+// JNI: Send a text message to the Discord voice channel's text chat
+#[no_mangle]
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1sendDiscordTextMessage(
+    mut env: JNIEnv<'_>,
+    _obj: jobject,
+    ptr: jlong,
+    message: JString<'_>,
+) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let message: String = match env.get_string(&message) {
+            Ok(s) => s.into(),
+            Err(_) => {
+                tracing::error!("JNI: Could not get message string");
+                return;
+            }
+        };
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
+        let send_result = crate::runtime::RUNTIME.block_on(async {
+            discord_bot.send_text_message(&message).await
+        });
+        if let Err(e) = send_result {
+            tracing::error!(?e, "Failed to send Discord text message");
+        }
+        let _ = Arc::into_raw(discord_bot);
+    }));
+    if result.is_err() {
+        tracing::error!("Rust panic in sendDiscordTextMessage JNI call");
     }
 }
 

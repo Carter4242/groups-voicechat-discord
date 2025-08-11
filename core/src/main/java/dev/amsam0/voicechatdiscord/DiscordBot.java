@@ -123,15 +123,25 @@ public final class DiscordBot {
      * Asynchronously deletes the Discord voice channel associated with this bot/group.
      */
     public void deleteDiscordVoiceChannelAsync() {
+        deleteDiscordVoiceChannelAsync(null);
+    }
+
+    /**
+     * Asynchronously deletes the Discord voice channel associated with this bot/group, then runs the callback if provided.
+     */
+    public void deleteDiscordVoiceChannelAsync(Runnable afterDelete) {
         if (freed) {
             platform.warn("Attempted to delete Discord channel after bot was freed");
+            if (afterDelete != null) afterDelete.run();
             return;
         }
         final Long channelIdToDelete = discordChannelId;
         if (channelIdToDelete == null) {
             platform.warn("No Discord channel to delete for categoryId=" + categoryId);
+            if (afterDelete != null) afterDelete.run();
             return;
         }
+        platform.info("Deleting Discord voice channel with ID " + channelIdToDelete);
         new Thread(() -> {
             try {
                 _deleteDiscordVoiceChannel(ptr);
@@ -143,6 +153,7 @@ public final class DiscordBot {
                 if (discordChannelId != null && discordChannelId.equals(channelIdToDelete)) {
                     discordChannelId = null;
                 }
+                if (afterDelete != null) afterDelete.run();
             }
         }, "DiscordChannelDeleteThread").start();
     }
@@ -180,6 +191,32 @@ public final class DiscordBot {
     // Native methods for channel management
     private static native long _createDiscordVoiceChannel(long ptr, String groupName);
     private static native void _deleteDiscordVoiceChannel(long ptr);
+
+    /**
+     * Asynchronously sends a text message to the Discord voice channel's text chat.
+     * @param message The message to send
+     */
+    public void sendDiscordTextMessageAsync(String message) {
+        if (freed) {
+            platform.warn("Attempted to send Discord text message after bot was freed");
+            return;
+        }
+        final Long channelIdToSend = discordChannelId;
+        if (channelIdToSend == null) {
+            platform.warn("No Discord channel to send text message for categoryId=" + categoryId);
+            return;
+        }
+        new Thread(() -> {
+            try {
+                _sendDiscordTextMessage(ptr, message);
+            } catch (Throwable t) {
+                platform.error("Exception while sending Discord text message for channelId=" + channelIdToSend + " (categoryId=" + categoryId + ")", t);
+            }
+        }, "DiscordChannelSendTextThread").start();
+    }
+
+    // Native method for sending a text message
+    private static native void _sendDiscordTextMessage(long ptr, String message);
 
     /**
      * Starts the background thread for Discord audio bridging.
@@ -262,13 +299,18 @@ public final class DiscordBot {
     public void stop() {
         try {
             stopDiscordAudioThread();
-            // Delete the Discord voice channel if it exists (async)
-            deleteDiscordVoiceChannelAsync();
-            _stop(ptr);
+            deleteDiscordVoiceChannelAsync(() -> {
+                try {
+                    _stop(ptr);
+                } catch (Throwable e) {
+                    platform.error("Failed to stop bot (categoryId=" + categoryId + ")", e);
+                }
+                platform.info("DiscordBot.stop finished for categoryId=" + categoryId);
+            });
         } catch (Throwable e) {
             platform.error("Failed to stop bot (categoryId=" + categoryId + ")", e);
+            platform.info("DiscordBot.stop finished for categoryId=" + categoryId);
         }
-    platform.info("DiscordBot.stop finished for categoryId=" + categoryId);
     }
 
     private native void _free(long ptr);
