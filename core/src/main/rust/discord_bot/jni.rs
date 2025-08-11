@@ -194,6 +194,44 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1deleteDisco
     let _ = Arc::into_raw(discord_bot);
 }
 
+// JNI: Update Discord voice channel name for this bot instance
+#[no_mangle]
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1updateDiscordVoiceChannelName(
+    mut env: JNIEnv<'_>,
+    _obj: jobject,
+    ptr: jlong,
+    new_name: JString<'_>,
+) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let new_name: String = match env.get_string(&new_name) {
+            Ok(s) => s.into(),
+            Err(_) => {
+                tracing::error!("JNI: Could not get new_name string");
+                return;
+            }
+        };
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
+        let state = discord_bot.state.read();
+        let http = match &*state {
+            super::State::LoggedIn { http } | super::State::Started { http, .. } => http.clone(),
+            _ => {
+                tracing::error!("JNI: Bot not logged in, cannot update channel name");
+                drop(state);
+                let _ = Arc::into_raw(discord_bot);
+                return;
+            }
+        };
+        drop(state);
+        let _ = crate::runtime::RUNTIME.block_on(async {
+            let _ = discord_bot.update_voice_channel_name(&http, &new_name).await;
+        });
+        let _ = Arc::into_raw(discord_bot);
+    }));
+    if result.is_err() {
+        tracing::error!("Rust panic in updateDiscordVoiceChannelName JNI call");
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToHearingBuffer<'local>(
     env: JNIEnv<'local>,

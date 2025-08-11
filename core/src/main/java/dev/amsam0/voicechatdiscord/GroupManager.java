@@ -15,12 +15,14 @@ import static dev.amsam0.voicechatdiscord.Core.platform;
 
 public final class GroupManager {
     public static final Map<UUID, List<ServerPlayer>> groupPlayerMap = new HashMap<>();
-
     // Map groupId -> DiscordBot
     public static final Map<UUID, DiscordBot> groupBotMap = new HashMap<>();
-
     // Map: groupId -> (player UUID -> List<StaticAudioChannel>)
     public static final Map<UUID, Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>>> groupAudioChannels = new HashMap<>();
+    // Track groups pending Discord channel creation
+    public static final Map<UUID, DiscordBot> pendingGroupCreations = new HashMap<>();
+    // Track groups removed before channel creation completes
+    public static final Set<UUID> removedBeforeCreation = new HashSet<>();
 
     private static List<ServerPlayer> getPlayers(Group group) {
         List<ServerPlayer> players = groupPlayerMap.putIfAbsent(group.getId(), new ArrayList<>());
@@ -59,12 +61,18 @@ public final class GroupManager {
 
         List<ServerPlayer> players = getPlayers(group);
         platform.info("[onJoinGroup] Current players in group: " + players.size());
-        if (players.stream().noneMatch(serverPlayer -> serverPlayer.getUuid() == player.getUuid())) {
+        boolean wasPresent = players.stream().anyMatch(serverPlayer -> serverPlayer.getUuid().equals(player.getUuid()));
+        if (!wasPresent) {
             platform.info(player.getUuid() + " (" + platform.getName(player) + ") joined " + group.getId() + " (" + group.getName() + ")");
             players.add(player);
             createStaticAudioChannelIfFirstGroup(group, player, event.getConnection());
         } else {
             platform.info(player.getUuid() + " (" + platform.getName(player) + ") already joined " + group.getId() + " (" + group.getName() + ")");
+        }
+        // Update Discord channel name
+        DiscordBot bot = groupBotMap.get(group.getId());
+        if (bot != null) {
+            bot.updateDiscordVoiceChannelNameAsync(players.size(), group.getName());
         }
     }
 
@@ -82,12 +90,17 @@ public final class GroupManager {
         }
 
         List<ServerPlayer> players = getPlayers(group);
-        players.remove(player);
+        players.removeIf(p -> p.getUuid().equals(player.getUuid()));
         // Remove StaticAudioChannel for this player if present
         Map<UUID, List<de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel>> channels = groupAudioChannels.get(group.getId());
         if (channels != null) {
             var removed = channels.remove(player.getUuid());
             if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + player.getUuid() + " in group " + group.getId());
+        }
+        // Update Discord channel name
+        DiscordBot bot = groupBotMap.get(group.getId());
+        if (bot != null) {
+            bot.updateDiscordVoiceChannelNameAsync(players.size(), group.getName());
         }
     }
 
@@ -119,7 +132,7 @@ public final class GroupManager {
         if (!Core.bots.isEmpty()) {
             DiscordBot found = null;
             for (DiscordBot candidate : Core.bots) {
-                if (!candidate.isStarted() && !groupBotMap.containsValue(candidate)) {
+                if (!candidate.isStarted() && !groupBotMap.containsValue(candidate) && !pendingGroupCreations.containsValue(candidate)) {
                     found = candidate;
                     break;
                 }
@@ -130,7 +143,7 @@ public final class GroupManager {
                 return;
             }
             final DiscordBot bot = found;
-            // Log in the bot first, then create the Discord voice channel, then start
+            pendingGroupCreations.put(groupId, bot);
             new Thread(() -> {
                 if (bot.logIn()) {
                     bot.createDiscordVoiceChannelAsync(group.getName(), discordChannelId -> {
@@ -138,7 +151,20 @@ public final class GroupManager {
                             platform.error("Failed to create Discord voice channel for group " + group.getName() + " (" + groupId + ")");
                             return;
                         }
+
                         bot.start();
+
+                        pendingGroupCreations.remove(groupId);
+                        synchronized (removedBeforeCreation) {
+                            if (removedBeforeCreation.contains(groupId)) {
+                                platform.info("Group " + groupId + " (" + group.getName() + ") was removed before Discord channel creation finished. Deleting channel.");
+                                bot.deleteDiscordVoiceChannelAsync();
+                                removedBeforeCreation.remove(groupId);
+                                bot.stop();
+                                return;
+                            }
+                        }
+
                         bot.startDiscordAudioThread(groupId);
                         groupBotMap.put(groupId, bot);
                         platform.info("Linked groupId " + groupId + " (" + group.getName() + ") to bot (discordChannelId=" + discordChannelId + ")");
@@ -151,6 +177,7 @@ public final class GroupManager {
                     });
                 } else {
                     platform.error("Failed to login to Discord for group " + group.getName() + " (" + groupId + ")");
+                    pendingGroupCreations.remove(groupId);
                 }
             }, "voicechat-discord: Bot AutoStart for Group").start();
         } else {
@@ -165,13 +192,22 @@ public final class GroupManager {
 
         platform.info("onGroupRemoved: Group removed: " + groupId + ", " + group.getName() + ")");
 
+        // If group is still pending creation, mark for deletion after creation
+        if (pendingGroupCreations.containsKey(groupId)) {
+            synchronized (removedBeforeCreation) {
+                removedBeforeCreation.add(groupId);
+            }
+            platform.info("onGroupRemoved: Group " + groupId + " is pending Discord channel creation. Will delete after creation.");
+        }
+
         DiscordBot bot = groupBotMap.remove(groupId);
         if (bot != null) {
             platform.info("onGroupRemoved: Stopping Discord bot for group: " + group.getName() + ")");
             bot.stop();
             platform.info("onGroupRemoved: Stopped Discord bot for group: " + group.getName() + ")");
+            bot.deleteDiscordVoiceChannelAsync();
         }
-
+        
         groupAudioChannels.remove(groupId);
         groupPlayerMap.remove(groupId);
     }

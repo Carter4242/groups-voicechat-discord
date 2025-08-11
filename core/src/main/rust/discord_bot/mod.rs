@@ -42,6 +42,8 @@ pub struct PlayerToDiscordBuffer {
     pub playout_buffer: StdMutex<PlayoutBuffer>,
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 struct DiscordBot {
     token: String,
     pub category_id: ChannelId, // The Discord category where channels are created
@@ -53,6 +55,7 @@ struct DiscordBot {
     discord_to_mc_buffer: DiscordToMinecraftBuffer,
     /// Buffers for Minecraft -> Discord audio (PCM data per player)
     player_to_discord_buffers: Arc<DashMap<Uuid, PlayerToDiscordBuffer>>,
+    audio_shutdown: Arc<AtomicBool>,
 }
 
 enum State {
@@ -89,6 +92,7 @@ impl DiscordBot {
                 received_audio_rx,
             },
             player_to_discord_buffers: Arc::new(DashMap::new()),
+            audio_shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -135,6 +139,25 @@ impl DiscordBot {
         Ok(())
     }
 
+    /// Asynchronously update the managed Discord voice channel's name, if it exists.
+    pub async fn update_voice_channel_name(&self, http: &Arc<Http>, new_name: &str) -> Result<(), Report> {
+        let channel_id_lock = self.channel_id.lock();
+        if let Some(channel_id) = channel_id_lock.as_ref() {
+            let builder = serenity::builder::EditChannel::new().name(new_name);
+            match channel_id.edit(http.as_ref(), builder).await {
+                Ok(_) => {
+                    info!("Updated Discord voice channel name to '{}' for channel {}", new_name, channel_id);
+                },
+                Err(e) => {
+                    warn!(?e, "Failed to update Discord voice channel name for channel {}", channel_id);
+                }
+            }
+        } else {
+            warn!("No Discord channel to update name");
+        }
+        Ok(())
+    }
+
 
 
     #[tracing::instrument(skip(self), fields(self.category_id = %self.category_id, self.channel_id = ?self.channel_id))]
@@ -165,6 +188,7 @@ impl DiscordBot {
             info!("Bot is not started");
             return Ok(());
         };
+        self.audio_shutdown.store(true, Ordering::SeqCst);
         self.disconnect(*guild_id);
         *state_lock = State::LoggedIn { http: http.clone() };
         Ok(())
@@ -184,6 +208,9 @@ impl DiscordBot {
 
     /// Store Opus payload in the player buffer, using the provided sequence number
     pub fn add_opus_to_playback_buffer(&self, player_id: Uuid, payload: Vec<u8>, seq: u16) {
+        if self.audio_shutdown.load(Ordering::SeqCst) {
+            return;
+        }
         // Special handling for zero-length packets: treat as end-of-speech marker
         if payload.is_empty() {
             let buffer = self.player_to_discord_buffers.entry(player_id)

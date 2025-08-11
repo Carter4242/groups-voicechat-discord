@@ -1,6 +1,7 @@
 use std::{
     io::{self, Write},
     sync::Arc,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use uuid::Uuid;
@@ -21,14 +22,17 @@ use std::sync::Mutex;
 
 
 #[inline]
-pub fn create_playable_input(player_to_discord_buffers: Arc<dashmap::DashMap<Uuid, PlayerToDiscordBuffer>>) -> Result<Input, Report> {
+pub fn create_playable_input(
+    player_to_discord_buffers: Arc<dashmap::DashMap<Uuid, PlayerToDiscordBuffer>>,
+    shutdown: Arc<AtomicBool>,
+) -> Result<Input, Report> {
     let audio_source = PlayerAudioSource {
         player_to_discord_buffers,
         next_frame_time: None,
         last_frame_sent: None,
-        //packet_timestamps: std::collections::VecDeque::with_capacity(100),
         prev_zero: false,
         opus_decoders: Mutex::new(HashMap::new()),
+        shutdown,
     };
     let input: Input = RawAdapter::new(audio_source, SAMPLE_RATE, CHANNELS).into();
     let input = match input {
@@ -46,14 +50,17 @@ struct PlayerAudioSource {
     player_to_discord_buffers: Arc<dashmap::DashMap<Uuid, PlayerToDiscordBuffer>>,
     next_frame_time: Option<std::time::Instant>,
     last_frame_sent: Option<std::time::Instant>,
-    //packet_timestamps: std::collections::VecDeque<std::time::Instant>,
     prev_zero: bool,
     opus_decoders: Mutex<HashMap<Uuid, OpusDecoder>>,
+    shutdown: Arc<AtomicBool>,
 }
 
 
 impl io::Read for PlayerAudioSource {
     fn read(&mut self, mut buf: &mut [u8]) -> io::Result<usize> {
+        if self.shutdown.load(Ordering::SeqCst) {
+            return Ok(0);
+        }
         use tracing::info;
 
         let now = std::time::Instant::now();
@@ -65,6 +72,9 @@ impl io::Read for PlayerAudioSource {
         let next_time = self.next_frame_time.unwrap_or(now);
         if next_time > now {
             let sleep_time = next_time - now;
+            if self.shutdown.load(Ordering::SeqCst) {
+                return Ok(0);
+            }
             tracing::info!("PlayerAudioSource::read: sleeping for {:?} until next frame time", sleep_time);
             std::thread::sleep(sleep_time);
         }
@@ -97,6 +107,9 @@ impl io::Read for PlayerAudioSource {
         self.next_frame_time = Some(next_time + FRAME_DURATION * (frames as u32));
 
         loop {
+            if self.shutdown.load(Ordering::SeqCst) {
+                return Ok(0);
+            }
             if self.prev_zero {
                 frames = 1;
                 self.prev_zero = false;

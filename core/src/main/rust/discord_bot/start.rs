@@ -8,6 +8,7 @@ use crate::runtime::RUNTIME;
 
 use super::discord_receive::VoiceHandler;
 use super::discord_speak::create_playable_input;
+use std::sync::atomic::Ordering;
 use super::State;
 
 impl super::DiscordBot {
@@ -41,6 +42,8 @@ impl super::DiscordBot {
         let songbird = bot.songbird.clone();
         let guild_id = channel.guild_id;
         let player_to_discord_buffers = Arc::clone(&bot.player_to_discord_buffers);
+        let audio_shutdown = Arc::clone(&bot.audio_shutdown);
+        audio_shutdown.store(false, Ordering::SeqCst);
         let bot_for_async = Arc::clone(&bot);
         {
             if let Err(e) = RUNTIME.block_on(async move {
@@ -69,8 +72,7 @@ impl super::DiscordBot {
                     },
                 );
 
-                call.play_only_input(create_playable_input(player_to_discord_buffers)?);
-                // TODO: track error handling
+                call.play_only_input(create_playable_input(player_to_discord_buffers, audio_shutdown)?);
 
                 eyre::Ok(())
             }) {

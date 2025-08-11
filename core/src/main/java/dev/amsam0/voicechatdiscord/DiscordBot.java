@@ -99,10 +99,11 @@ public final class DiscordBot {
         }
         new Thread(() -> {
             try {
-                long channelId = _createDiscordVoiceChannel(ptr, groupName);
+                String initialName = "[1 Player] " + groupName;
+                long channelId = _createDiscordVoiceChannel(ptr, initialName);
                 if (channelId != 0L) {
                     this.discordChannelId = channelId;
-                    platform.info("Created Discord voice channel '" + groupName + "' with ID " + channelId);
+                    platform.info("Created Discord voice channel '" + initialName + "' with ID " + channelId);
                     callback.accept(channelId);
                 } else {
                     platform.error("Failed to create Discord voice channel for group '" + groupName + "'");
@@ -145,6 +146,36 @@ public final class DiscordBot {
             }
         }, "DiscordChannelDeleteThread").start();
     }
+
+    /**
+     * Asynchronously updates the Discord voice channel name to reflect the current player count and group name.
+     * @param playerCount Number of players in the group
+     * @param groupName The group name
+     */
+    public void updateDiscordVoiceChannelNameAsync(int playerCount, String groupName) {
+        if (freed) {
+            platform.warn("Attempted to update Discord channel name after bot was freed");
+            return;
+        }
+        final Long channelIdToUpdate = discordChannelId;
+        if (channelIdToUpdate == null) {
+            platform.warn("No Discord channel to update for categoryId=" + categoryId);
+            return;
+        }
+        String playerWord = (playerCount == 1) ? "Player" : "Players";
+        String newName = "[" + playerCount + " " + playerWord + "] " + groupName;
+        new Thread(() -> {
+            try {
+                _updateDiscordVoiceChannelName(ptr, newName);
+                platform.info("Updated Discord voice channel name to '" + newName + "' for channelId=" + channelIdToUpdate);
+            } catch (Throwable t) {
+                platform.error("Exception while updating Discord voice channel name for channelId=" + channelIdToUpdate + " (categoryId=" + categoryId + ")", t);
+            }
+        }, "DiscordChannelUpdateNameThread").start();
+    }
+
+    // Native method for updating channel name
+    private static native void _updateDiscordVoiceChannelName(long ptr, String newName);
 
     // Native methods for channel management
     private static native long _createDiscordVoiceChannel(long ptr, String groupName);
@@ -246,12 +277,12 @@ public final class DiscordBot {
      * Safety: the class should be discarded after calling
      */
     public void free() {
-    platform.info("DiscordBot.free called for categoryId=" + categoryId);
+        platform.info("DiscordBot.free called for categoryId=" + categoryId);
         freed = true;
         stopDiscordAudioThread();
         deleteDiscordVoiceChannelAsync();
         _free(ptr);
-    platform.info("DiscordBot.free finished for categoryId=" + categoryId);
+        platform.info("DiscordBot.free finished for categoryId=" + categoryId);
     }
 
     private native void _addAudioToHearingBuffer(long ptr, byte[] groupIdBytes, byte[] rawOpusData, long sequenceNumber);
