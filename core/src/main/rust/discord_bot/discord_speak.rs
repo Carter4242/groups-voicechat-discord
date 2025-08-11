@@ -7,7 +7,7 @@ use std::{
 use uuid::Uuid;
 use eyre::{Context, Report};
 use songbird::input::{
-    codecs::{CODEC_REGISTRY, PROBE},
+    codecs::{get_codec_registry, get_probe},
     core::io::MediaSource,
     Input, RawAdapter,
 };
@@ -40,7 +40,7 @@ pub fn create_playable_input(
         _ => unreachable!("From<RawAdapter> for Input always gives Input::Live"),
     };
     let parsed = input
-        .promote(&CODEC_REGISTRY, &PROBE)
+        .promote(get_codec_registry(), get_probe())
         .wrap_err("Unable to promote input")?;
     Ok(Input::Live(parsed, None))
 }

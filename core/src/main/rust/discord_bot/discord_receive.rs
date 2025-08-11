@@ -4,8 +4,6 @@ use discortp::{
 };
 use serenity::all::{ChannelId};
 use songbird::{Event, EventContext, EventHandler};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 use std::collections::HashMap;
@@ -24,8 +22,6 @@ pub fn get_username_for_ssrc(ssrc: u32) -> Option<String> {
     let map = SSRC_USERNAME_MAP.get_or_init(|| Mutex::new(HashMap::new()));
     map.lock().unwrap().get(&ssrc).cloned()
 }
-
-static LAST_PACKET_TIME: AtomicU64 = AtomicU64::new(0);
 
 // Maintains the SSRC order for the current frame. This is only for the lifetime of the handler.
 static LAST_SSRC_ORDER: OnceLock<Mutex<VecDeque<u32>>> = OnceLock::new();
@@ -116,14 +112,6 @@ impl EventHandler for VoiceHandler {
             }
 
             if !user_payloads.is_empty() {
-                // Log ms since last packet (for the batch)
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_millis() as u64;
-                let last = LAST_PACKET_TIME.swap(now, Ordering::SeqCst);
-                if last != 0 {
-                    let delta = now.saturating_sub(last);
-                    tracing::info!("VoiceHandler: {} ms since last Discord audio packet for vc_id={}", delta, self.vc_id);
-                }
-
                 if buffer.received_audio_tx.send(user_payloads).is_err() {
                     tracing::error!("VoiceHandler: received_audio_tx dropped for vc_id={}; bot may have been stopped or freed", self.vc_id);
                 }
