@@ -2,11 +2,14 @@ package dev.amsam0.voicechatdiscord;
 
 import com.mojang.brigadier.context.CommandContext;
 import de.maxhenkel.voicechat.api.Player;
+import de.maxhenkel.voicechat.api.ServerPlayer;
 
 import static dev.amsam0.voicechatdiscord.Core.debugLevel;
 
 public interface Platform {
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    ServerPlayer commandContextToPlayer(CommandContext<?> context);
+
     boolean isOperator(CommandContext<?> sender);
 
     boolean hasPermission(CommandContext<?> sender, String permission);
@@ -28,6 +31,8 @@ public interface Platform {
     void error(String message);
 
     void error(String message, Throwable throwable);
+
+    void sendActionBar(Player player, Component... message);
 
     default void debug(String message) {
         if (debugLevel >= 1) info("[DEBUG 1] " + message);
