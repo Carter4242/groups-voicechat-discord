@@ -118,6 +118,6 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_Core_setDebugLevel<'loca
     }
     // Force set logging level to TRACE after any call
     reload_handle
-        .modify(|filter| filter.set_max_level(Level::WARN))
+        .modify(|filter| filter.set_max_level(Level::INFO))
         .expect("failed to force logging level to TRACE");
 }

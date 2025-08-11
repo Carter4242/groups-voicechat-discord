@@ -1,5 +1,5 @@
 use jni::{
-    objects::{JByteArray, JClass, JString},
+    objects::{JByteArray, JString},
     sys::{jboolean, jlong, jobject},
     JNIEnv,
 };
@@ -11,10 +11,12 @@ use crate::ResultExt;
 
 use super::DiscordBot;
 
+use jni::objects::JObject;
+
 #[no_mangle]
 pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1new<'local>(
     mut env: JNIEnv<'local>,
-    _class: JClass<'local>,
+    this: JObject<'local>,
     token: JString<'local>,
     category_id: jlong,
 ) -> jlong {
@@ -23,7 +25,15 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1new<'local>
         .expect("Couldn't get java string! Please file a GitHub issue")
         .into();
 
-    let discord_bot = Arc::new(DiscordBot::new(token, ChannelId::new(category_id as u64)));
+    let java_vm = env.get_java_vm().expect("Couldn't get JavaVM");
+    let java_bot_obj = env.new_global_ref(this).expect("Couldn't create global ref");
+
+    let discord_bot = Arc::new(DiscordBot::new(
+        token,
+        ChannelId::new(category_id as u64),
+        Arc::new(java_vm),
+        java_bot_obj,
+    ));
     Arc::into_raw(discord_bot) as jlong
 }
 
@@ -170,7 +180,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1createDisco
 // JNI: Delete Discord voice channel for this bot instance
 #[no_mangle]
 pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1deleteDiscordVoiceChannel(
-    _env: JNIEnv<'_>,
+    mut _env: JNIEnv<'_>,
     _obj: jobject,
     ptr: jlong,
 ) {
@@ -343,11 +353,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
 
     if ptr == 0 {
         tracing::error!("JNI blockForSpeakingBufferOpusData called with null pointer");
-        // Return an empty Java array of byte arrays
-        let empty = env.new_byte_array(0).expect("Couldn't create empty byte array");
-        let byte_array_class = env.find_class("[B").unwrap();
-        let arr = env.new_object_array(0, byte_array_class, empty).unwrap();
-        return arr.into_raw();
+        return std::ptr::null_mut();
     }
 
     // Only catch panics around the Rust logic, not JNI calls
@@ -360,28 +366,77 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
 
     match rust_result {
         Ok(Ok(opus_packets)) => {
-            tracing::info!("JNI: Got Discord audio ({} packets) for bot ptr={:#x}", opus_packets.len(), ptr);
-            let byte_array_class = env.find_class("[B").unwrap();
-            let empty = env.new_byte_array(0).unwrap();
-            let arr = env.new_object_array(opus_packets.len() as i32, byte_array_class, empty).unwrap();
-            for (i, packet) in opus_packets.iter().enumerate() {
-                let jpacket = env.byte_array_from_slice(packet).expect("Couldn't create byte array from slice");
-                env.set_object_array_element(&arr, i as i32, JObject::from(jpacket)).expect("Couldn't set array element");
+            // Create the main array as [[[B]] (3D byte array)
+            let tuple_arr_class = env.find_class("[[B").expect("Couldn't find [[B class");
+            let arr = env.new_object_array(opus_packets.len() as i32, tuple_arr_class, JObject::null()).expect("Couldn't create main [[[B array");
+            for (i, (username, payload)) in opus_packets.iter().enumerate() {
+                let username_bytes = username.as_bytes();
+                let j_username = env.byte_array_from_slice(username_bytes).expect("Couldn't create byte array from username");
+                let j_payload = env.byte_array_from_slice(payload).expect("Couldn't create byte array from payload");
+                // Create a 2D byte array (byte[][]) for the tuple [usernameBytes, opusBytes]
+                let tuple_arr_class = env.find_class("[B").expect("Couldn't find [B class");
+                let tuple_arr = env.new_object_array(2, tuple_arr_class, JObject::null()).expect("Couldn't create tuple array");
+                env.set_object_array_element(&tuple_arr, 0, JObject::from(j_username)).expect("Couldn't set username element");
+                env.set_object_array_element(&tuple_arr, 1, JObject::from(j_payload)).expect("Couldn't set payload element");
+                env.set_object_array_element(&arr, i as i32, JObject::from(tuple_arr)).expect("Couldn't set tuple array element");
             }
             arr.into_raw()
         },
         Ok(Err(_)) => {
-            let byte_array_class = env.find_class("[B").unwrap();
-            let empty = env.new_byte_array(0).unwrap();
-            let arr = env.new_object_array(0, byte_array_class, empty).unwrap();
-            arr.into_raw()
+            std::ptr::null_mut()
         },
         Err(_) => {
             tracing::error!("Panic in blockForSpeakingBufferOpusData for ptr: {:#x}", ptr);
-            let byte_array_class = env.find_class("[B").unwrap();
-            let empty = env.new_byte_array(0).unwrap();
-            let arr = env.new_object_array(0, byte_array_class, empty).unwrap();
-            arr.into_raw()
+            std::ptr::null_mut()
         }
     }
+}
+
+/// Notify Java when a Discord user's voice state changes (join/leave VC).
+pub fn notify_java_discord_user_voice_state(
+    env: &mut jni::JNIEnv,
+    java_bot_obj: &jni::objects::JObject,
+    discord_user_id: u64,
+    username: &str,
+    channel_id: u64,
+    joined: bool,
+) {
+    let username_jstring = env.new_string(username).expect("Failed to create Java string for username");
+    env.call_method(
+        java_bot_obj,
+        "onDiscordUserVoiceState",
+        "(JLjava/lang/String;JZ)V",
+        &[
+            jni::objects::JValue::Long(discord_user_id as i64),
+            jni::objects::JValue::Object(&jni::objects::JObject::from(username_jstring)),
+            jni::objects::JValue::Long(channel_id as i64),
+            jni::objects::JValue::Bool(joined as u8),
+        ],
+    ).expect("Failed to call onDiscordUserVoiceState on Java side");
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1disconnect(
+    mut _env: JNIEnv<'_>,
+    _obj: jobject,
+    ptr: jlong,
+) {
+    tracing::info!("JNI: Java_dev_amsam0_voicechatdiscord_DiscordBot__1disconnect called for ptr={:#x}", ptr);
+    let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
+    // Try to get guild_id from bot state if available
+    let guild_id = {
+        let state = discord_bot.state.read();
+        match &*state {
+            super::State::Started { guild_id, .. } => Some(*guild_id),
+            _ => None,
+        }
+    };
+    if let Some(guild_id) = guild_id {
+        let _ = crate::runtime::RUNTIME.block_on(async {
+            discord_bot.disconnect(guild_id).await
+        });
+    } else {
+        tracing::warn!("JNI: Bot is not in a started state, cannot disconnect from voice channel");
+    }
+    let _ = Arc::into_raw(discord_bot);
 }

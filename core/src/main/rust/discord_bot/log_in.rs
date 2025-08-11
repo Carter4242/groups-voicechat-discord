@@ -19,7 +19,7 @@ use super::State;
 
 impl super::DiscordBot {
     #[tracing::instrument(skip(self), fields(self.category_id = %self.category_id, self.channel_id = ?self.channel_id))]
-    pub fn log_in(&self) -> Result<(), Report> {
+    pub fn log_in(self: &Arc<Self>) -> Result<(), Report> {
         let mut state_lock = self.state.write();
 
         if !matches!(*state_lock, State::NotLoggedIn) {
@@ -33,6 +33,7 @@ impl super::DiscordBot {
 
         let token = self.token.clone();
         let songbird = self.songbird.clone();
+        let bot_weak = Arc::downgrade(self);
         let mut client_task = self.client_task.lock();
         // While this should never happen, it's better to catch it than leave it running
         if let Some(client_task) = &*client_task {
@@ -58,6 +59,7 @@ impl super::DiscordBot {
                     let mut client = match Client::builder(&token, intents)
                         .event_handler(Handler {
                             log_in_tx: tx.clone(),
+                            bot: bot_weak,
                         })
                         .register_songbird_with(songbird)
                         .await
@@ -98,8 +100,11 @@ impl super::DiscordBot {
     }
 }
 
+use std::sync::Weak;
+
 struct Handler {
     pub log_in_tx: mpsc::Sender<Result<Arc<Http>, Report>>,
+    pub bot: Weak<super::DiscordBot>,
 }
 
 #[serenity::async_trait]
@@ -109,5 +114,49 @@ impl EventHandler for Handler {
             .send(Ok(ctx.http))
             .await
             .expect("log_in rx dropped - please file a GitHub issue");
+    }
+
+    async fn voice_state_update(
+        &self,
+        _ctx: Context,
+        _old: Option<serenity::all::VoiceState>,
+        new: serenity::all::VoiceState,
+    ) {
+        let user_id = new.user_id.get() as i64;
+        let username = if let Some(member) = &new.member {
+            member.user.name.clone()
+        } else {
+            "<unknown>".to_string()
+        };
+
+        if let Some(bot) = self.bot.upgrade() {
+            // Always update the user_id -> username map
+            bot.update_username_mapping(user_id as u64, &username);
+
+            let mut env = bot.java_vm.attach_current_thread().expect("Failed to attach thread to JVM");
+            if let Some(channel_id) = new.channel_id {
+                // User joined or switched channel
+                crate::discord_bot::jni_bridge::notify_java_discord_user_voice_state(
+                    &mut env,
+                    bot.java_bot_obj.as_obj(),
+                    user_id as u64,
+                    &username,
+                    channel_id.get() as u64,
+                    true,
+                );
+            } else {
+                // User left all voice channels
+                crate::discord_bot::jni_bridge::notify_java_discord_user_voice_state(
+                    &mut env,
+                    bot.java_bot_obj.as_obj(),
+                    user_id as u64,
+                    &username,
+                    0,
+                    false,
+                );
+            }
+        } else {
+            tracing::warn!("[voice_state_update] DiscordBot instance no longer exists");
+        }
     }
 }

@@ -64,13 +64,12 @@ impl super::DiscordBot {
                     tracing::warn!("Songbird call has no active connection after join; audio bridging will not work");
                 }
 
-                call.add_global_event(
-                    CoreEvent::VoiceTick.into(),
-                    VoiceHandler {
-                        vc_id: channel_id,
-                        bot: Arc::clone(&bot_for_async),
-                    },
-                );
+                let handler = VoiceHandler {
+                    vc_id: channel_id,
+                    bot: Arc::clone(&bot_for_async),
+                };
+                call.add_global_event(CoreEvent::VoiceTick.into(), handler.clone());
+                call.add_global_event(CoreEvent::SpeakingStateUpdate.into(), handler);
 
                 call.play_only_input(create_playable_input(player_to_discord_buffers, audio_shutdown)?);
 

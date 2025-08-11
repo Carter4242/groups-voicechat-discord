@@ -22,13 +22,13 @@ use crate::audio_util::MAX_AUDIO_BUFFER;
 
 mod discord_receive;
 mod discord_speak;
-mod jni;
+mod jni_bridge;
 mod log_in;
 mod start;
 
 struct DiscordToMinecraftBuffer {
-    received_audio_tx: flume::Sender<Vec<Vec<u8>>>,
-    received_audio_rx: flume::Receiver<Vec<Vec<u8>>>,
+    received_audio_tx: flume::Sender<Vec<(String, Vec<u8>)>>,
+    received_audio_rx: flume::Receiver<Vec<(String, Vec<u8>)>>,
 }
 
 
@@ -43,7 +43,10 @@ pub struct PlayerToDiscordBuffer {
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-struct DiscordBot {
+use jni::JavaVM;
+use jni::objects::GlobalRef;
+
+pub struct DiscordBot {
     token: String,
     pub category_id: ChannelId, // The Discord category where channels are created
     pub channel_id: parking_lot::Mutex<Option<ChannelId>>, // The managed voice channel (created dynamically)
@@ -55,6 +58,12 @@ struct DiscordBot {
     /// Buffers for Minecraft -> Discord audio (PCM data per player)
     player_to_discord_buffers: Arc<DashMap<Uuid, PlayerToDiscordBuffer>>,
     audio_shutdown: Arc<AtomicBool>,
+    /// JNI: JavaVM for cross-thread callback
+    pub java_vm: Arc<JavaVM>,
+    /// JNI: GlobalRef to the Java DiscordBot object
+    pub java_bot_obj: GlobalRef,
+    /// Map of user_id -> username, updated when users join a channel
+    user_id_to_username: Arc<DashMap<u64, String>>,
 }
 
 enum State {
@@ -70,7 +79,7 @@ enum State {
 }
 
 impl DiscordBot {
-    pub fn new(token: String, category_id: ChannelId) -> DiscordBot {
+    pub fn new(token: String, category_id: ChannelId, java_vm: Arc<JavaVM>, java_bot_obj: GlobalRef) -> DiscordBot {
         let (received_audio_tx, received_audio_rx) = flume::bounded(MAX_AUDIO_BUFFER);
         DiscordBot {
             token,
@@ -92,7 +101,22 @@ impl DiscordBot {
             },
             player_to_discord_buffers: Arc::new(DashMap::new()),
             audio_shutdown: Arc::new(AtomicBool::new(false)),
+            java_vm,
+            java_bot_obj,
+            user_id_to_username: Arc::new(DashMap::new()),
         }
+    }
+
+    // Looks up the username for a given user_id from the local map
+    pub fn lookup_username(&self, user_id: impl Into<u64>) -> Option<String> {
+        let user_id = user_id.into();
+        self.user_id_to_username.get(&user_id).map(|entry| entry.value().clone())
+    }
+
+    /// Call this when a user joins a channel to update the user_id -> username map
+    pub fn update_username_mapping(&self, user_id: impl Into<u64>, username: &str) {
+        let user_id = user_id.into();
+        self.user_id_to_username.insert(user_id, username.to_string());
     }
 
     /// Asynchronously create a Discord voice channel in the configured category.
@@ -301,7 +325,7 @@ impl DiscordBot {
         Ok(())
     }
 
-    pub fn block_for_speaking_opus_data(&self) -> Result<Vec<Vec<u8>>, Report> {
+    pub fn block_for_speaking_opus_data(&self) -> Result<Vec<(String, Vec<u8>)>, Report> {
         match self.discord_to_mc_buffer.received_audio_rx.recv_timeout(Duration::from_millis(50)) {
             Ok(data) => Ok(data),
             Err(flume::RecvTimeoutError::Timeout) => {
