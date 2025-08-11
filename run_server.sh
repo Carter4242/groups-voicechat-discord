@@ -10,6 +10,10 @@ yellow="\033[0;33m"
 green="\033[0;32m"
 red="\033[0;31m"
 clear="\033[0m"
+NO_EXIT=""
+if [ "$3" == "--no-exit" ]; then
+  NO_EXIT=1
+fi
 
 if [ "$minecraftVersion" == "" ]; then
   echo -e "${red}Please specify a minecraft version${clear}"
@@ -65,3 +69,9 @@ fi
 echo -e "${green}Running version $minecraftVersion on platform $platform${clear}"
 cd "$platform/run/$minecraftVersion"
 java -Xms4G -Xmx4G -jar server.jar --nogui
+
+# If --no-exit flag is set, pause at the end
+if [ "$NO_EXIT" = "1" ]; then
+  echo -e "${yellow}Server stopped. Press enter to exit...${clear}"
+  read
+fi
