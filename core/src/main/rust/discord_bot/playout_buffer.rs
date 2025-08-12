@@ -92,23 +92,9 @@ impl PlayoutBuffer {
             self.consecutive_store_fails += 1;
             // If too many consecutive store fails, treat as desync and reset buffer
             if self.consecutive_store_fails >= err_threshold {
-                let old_seq = self.next_seq;
-                tracing::info!(
-                    old_seq,
-                    new_seq = pkt_seq,
-                    fails = self.consecutive_store_fails,
-                    threshold = err_threshold,
-                    "store_packet: too many out-of-range packets (>{}), resetting buffer from old_seq={} to new_seq={} ({} fails)",
-                    err_threshold, old_seq, pkt_seq, self.consecutive_store_fails
-                );
                 self.reset_buffer(pkt_seq, packet);
             }
             return;
-        }
-
-        // If buffer is at or above capacity, drop the packet and log
-        if self.buffer.len() >= self.capacity {
-            tracing::info!(seq = pkt_seq, capacity = self.capacity, buf_size = self.buffer.len(), "store_packet: buffer full");
         }
         
         while self.buffer.len() <= desired_index {
@@ -123,26 +109,18 @@ impl PlayoutBuffer {
 
     pub fn fetch_packet(&mut self) -> PacketLookup {
         if self.playout_mode == PlayoutMode::Fill {
-            tracing::info!(buf_size = self.buffer.len(), "fetch_packet: returning Filling (in Fill mode)");
             return PacketLookup::Filling;
         }
         let out = match self.buffer.pop_front() {
             Some(Some(pkt)) => {
-                if self.buffer.len() >= 10 {
-                    tracing::info!(seq = pkt.seq, buf_size = self.buffer.len(), "fetch_packet: returning packet with seq");
-                } else {
-                    tracing::info!(seq = pkt.seq, buf_size = self.buffer.len(), "fetch_packet: returning packet with seq");
-                }
                 self.next_seq = self.next_seq.wrapping_add(1);
                 PacketLookup::Packet(pkt)
             },
             Some(None) => {
-                tracing::info!(seq = self.next_seq, buf_size = self.buffer.len(), "fetch_packet: missed packet with seq");
                 self.next_seq = self.next_seq.wrapping_add(1);
                 PacketLookup::MissedPacket
             },
             None => {
-                tracing::info!(next_seq = self.next_seq, buf_size = self.buffer.len(), "fetch_packet: buffer empty, entering Fill mode");
                 PacketLookup::Filling
             },
         };

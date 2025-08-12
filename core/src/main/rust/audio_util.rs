@@ -18,7 +18,6 @@ pub fn combine_audio_parts(parts: Vec<RawAudio>) -> RawAudio {
     let Some(max_length) = parts.iter().map(|p| p.len()).max() else {
         return [0; RAW_AUDIO_SIZE];
     };
-    //info!("combine_audio_parts: max_length={} samples ({} ms)", max_length, (max_length as f32 / 48_000.0 * 1000.0));
     let mut mixed = [0; RAW_AUDIO_SIZE];
     let mut sample: i32;
     for i in 0..max_length {

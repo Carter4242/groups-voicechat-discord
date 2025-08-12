@@ -61,7 +61,6 @@ impl io::Read for PlayerAudioSource {
         if self.shutdown.load(Ordering::SeqCst) {
             return Ok(0);
         }
-        use tracing::info;
 
         let now = std::time::Instant::now();
         const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(20);
@@ -75,7 +74,6 @@ impl io::Read for PlayerAudioSource {
             if self.shutdown.load(Ordering::SeqCst) {
                 return Ok(0);
             }
-            tracing::info!("PlayerAudioSource::read: sleeping for {:?} until next frame time", sleep_time);
             std::thread::sleep(sleep_time);
         }
         let now = std::time::Instant::now();
@@ -95,14 +93,6 @@ impl io::Read for PlayerAudioSource {
             frames = 1;
             self.prev_zero = false;
         }
-
-        tracing::info!(
-            "PlayerAudioSource::read: requested {} frames ({}ms elapsed), buffer can fit {}, will process {} frames",
-            frames_to_catch_up,
-            elapsed.as_millis(),
-            max_frames,
-            frames
-        );
 
         self.next_frame_time = Some(next_time + FRAME_DURATION * (frames as u32));
 
@@ -149,7 +139,6 @@ impl io::Read for PlayerAudioSource {
                             let output = (&mut pcm[..]).try_into().unwrap();
                             match decoder.decode(Some(packet), output, false) {
                                 Ok(_) => {
-                                    info!(player=?uuid, seq=pkt.seq, "Decoded opus packet");
                                     user_pcm.insert(uuid, pcm);
                                     all_samples.push(pcm);
                                     // Check if PCM is not all zero
@@ -169,7 +158,6 @@ impl io::Read for PlayerAudioSource {
                             let output = (&mut pcm[..]).try_into().unwrap();
                             match decoder.decode(None, output, false) {
                                 Ok(_) => {
-                                    info!(player=?uuid, "PLC generated frame");
                                     user_pcm.insert(uuid, pcm);
                                     all_samples.push(pcm);
                                     // Check if PLC output is not all zero
@@ -202,7 +190,6 @@ impl io::Read for PlayerAudioSource {
                     written += buf.write(&converted.to_le_bytes())?;
                 }
             }
-            //tracing::info!("PlayerAudioSource::read: returned {} frames, skipped {} frames (all missing)", _frames_returned, _frames_skipped);
             if written == 0 {
                 // If we just failed to send frames, only return 1 frame next time
                 self.prev_zero = true;
@@ -211,16 +198,6 @@ impl io::Read for PlayerAudioSource {
             }
             // Log actual time since last frame sent
             let now = std::time::Instant::now();
-            let elapsed = if let Some(last) = self.last_frame_sent {
-                now.duration_since(last)
-            } else {
-                std::time::Duration::from_secs(0)
-            };
-            if elapsed > std::time::Duration::from_millis(30) {
-                tracing::info!(?elapsed, "Actual time since last frame sent (over 30ms!)");
-            } else {
-                tracing::info!(?elapsed, "Actual time since last frame sent");
-            }
             self.last_frame_sent = Some(now);
             self.prev_zero = false;
             return Ok(written);

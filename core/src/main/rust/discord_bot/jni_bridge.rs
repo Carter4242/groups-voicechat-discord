@@ -311,23 +311,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
     };
 
     let raw_opus_data = match env.convert_byte_array(raw_opus_data) {
-        Ok(data) => {
-            // --- Packet rate logging ---
-            {
-                use std::time::Instant;
-                let now = Instant::now();
-                static PACKET_TIMESTAMPS: once_cell::sync::Lazy<std::sync::Mutex<Vec<Instant>>> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(Vec::new()));
-                let mut timestamps = PACKET_TIMESTAMPS.lock().unwrap();
-                timestamps.push(now);
-                let cutoff = now - std::time::Duration::from_millis(500);
-                while !timestamps.is_empty() && timestamps[0] < cutoff {
-                    timestamps.remove(0);
-                }
-                let rate = timestamps.len() as f64 * 2.0;
-                tracing::info!("Adding new packet to player_id: {} (length: {}) | [PacketRate] {:.1} packets/sec (rolling 0.5s window)", player_id, data.len(), rate);
-            }
-            data
-        }
+        Ok(data) => data,
         Err(e) => {
             tracing::error!("Unable to convert opus byte array: {:?}", e);
             let _ = Arc::into_raw(discord_bot);

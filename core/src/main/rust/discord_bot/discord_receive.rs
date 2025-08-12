@@ -4,32 +4,17 @@ use discortp::{
 };
 use serenity::all::{ChannelId};
 use songbird::{Event, EventContext, EventHandler};
-use std::collections::VecDeque;
-use std::sync::{Mutex, OnceLock};
-use std::collections::HashMap;
 
-// Global SSRC -> username map
-static SSRC_USERNAME_MAP: OnceLock<Mutex<HashMap<u32, String>>> = OnceLock::new();
+use std::collections::{VecDeque, HashMap};
+use std::sync::Mutex;
 
-/// Update the SSRC -> username map
-pub fn update_ssrc_username(ssrc: u32, username: String) {
-    let map = SSRC_USERNAME_MAP.get_or_init(|| Mutex::new(HashMap::new()));
-    map.lock().unwrap().insert(ssrc, username);
-}
-
-/// Get the username for a given SSRC, if known
-pub fn get_username_for_ssrc(ssrc: u32) -> Option<String> {
-    let map = SSRC_USERNAME_MAP.get_or_init(|| Mutex::new(HashMap::new()));
-    map.lock().unwrap().get(&ssrc).cloned()
-}
-
-// Maintains the SSRC order for the current frame. This is only for the lifetime of the handler.
-static LAST_SSRC_ORDER: OnceLock<Mutex<VecDeque<u32>>> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct VoiceHandler {
     pub vc_id: ChannelId,
     pub bot: std::sync::Arc<super::DiscordBot>,
+    pub ssrc_username_map: std::sync::Arc<Mutex<HashMap<u32, String>>>,
+    pub last_ssrc_order: std::sync::Arc<Mutex<VecDeque<u32>>>,
 }
 
 #[serenity::async_trait]
@@ -41,12 +26,13 @@ impl EventHandler for VoiceHandler {
             if let Some(user_id) = speaking.user_id {
                 // Only update if this SSRC is not already mapped
                 let already_mapped = {
-                    let map = SSRC_USERNAME_MAP.get_or_init(|| Mutex::new(HashMap::new()));
-                    map.lock().unwrap().contains_key(&speaking.ssrc)
+                    let map = self.ssrc_username_map.lock().unwrap();
+                    map.contains_key(&speaking.ssrc)
                 };
                 if !already_mapped {
                     if let Some(username) = self.bot.lookup_username(user_id.0) {
-                        update_ssrc_username(speaking.ssrc, username);
+                        let mut map = self.ssrc_username_map.lock().unwrap();
+                        map.insert(speaking.ssrc, username);
                     }
                 }
             }
@@ -58,8 +44,7 @@ impl EventHandler for VoiceHandler {
                 return None;
             }
             // Maintain a stable SSRC order for this frame, appending new SSRCs to the end.
-            let ssrc_order_mutex = LAST_SSRC_ORDER.get_or_init(|| Mutex::new(VecDeque::new()));
-            let mut ssrc_order = ssrc_order_mutex.lock().unwrap();
+            let mut ssrc_order = self.last_ssrc_order.lock().unwrap();
             let mut new_order = VecDeque::new();
             let mut payload_map = std::collections::HashMap::new();
             // Collect all current SSRCs and their data
@@ -106,7 +91,10 @@ impl EventHandler for VoiceHandler {
             let mut user_payloads = Vec::new();
             for &ssrc in new_order.iter() {
                 if let Some(payload) = payload_map.get(&ssrc) {
-                    let username = get_username_for_ssrc(ssrc).unwrap_or_else(|| "Unknown User".to_string());
+                    let username = {
+                        let map = self.ssrc_username_map.lock().unwrap();
+                        map.get(&ssrc).cloned().unwrap_or_else(|| "Unknown User".to_string())
+                    };
                     user_payloads.push((username, payload.clone()));
                 }
             }
