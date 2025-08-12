@@ -14,6 +14,7 @@ use songbird::input::{
 
 use crate::audio_util::{CHANNELS, SAMPLE_RATE};
 use crate::audio_util::{OPUS_SAMPLE_RATE, OPUS_CHANNELS};
+use once_cell::sync::Lazy;
 use crate::discord_bot::PlayerToDiscordBuffer;
 use crate::discord_bot::playout_buffer::PacketLookup;
 use songbird::driver::opus::coder::Decoder as OpusDecoder;
@@ -25,7 +26,9 @@ use std::sync::Mutex;
 pub fn create_playable_input(
     player_to_discord_buffers: Arc<dashmap::DashMap<Uuid, PlayerToDiscordBuffer>>,
     shutdown: Arc<AtomicBool>,
-) -> Result<Input, Report> {
+) -> Result<(Input, Uuid), Report> {
+    let should_send_silence = Arc::new(AtomicBool::new(false));
+    let audio_source_id = Uuid::new_v4();
     let audio_source = PlayerAudioSource {
         player_to_discord_buffers,
         next_frame_time: None,
@@ -33,7 +36,12 @@ pub fn create_playable_input(
         prev_zero: false,
         opus_decoders: Mutex::new(HashMap::new()),
         shutdown,
+        should_send_silence: should_send_silence.clone(),
+        silent_countdown: 0,
+        _id: audio_source_id,
     };
+    // Register this audio source globally
+    AUDIO_SOURCE_REGISTRY.insert(audio_source_id, should_send_silence);
     let input: Input = RawAdapter::new(audio_source, SAMPLE_RATE, CHANNELS).into();
     let input = match input {
         Input::Live(i, _) => i,
@@ -42,7 +50,7 @@ pub fn create_playable_input(
     let parsed = input
         .promote(get_codec_registry(), get_probe())
         .wrap_err("Unable to promote input")?;
-    Ok(Input::Live(parsed, None))
+    Ok((Input::Live(parsed, None), audio_source_id))
 }
 
 
@@ -53,6 +61,24 @@ struct PlayerAudioSource {
     prev_zero: bool,
     opus_decoders: Mutex<HashMap<Uuid, OpusDecoder>>,
     shutdown: Arc<AtomicBool>,
+    should_send_silence: Arc<AtomicBool>,
+    silent_countdown: u8,
+    _id: Uuid,
+}
+
+// Global registry of all PlayerAudioSource's should_send_silence flags
+static AUDIO_SOURCE_REGISTRY: Lazy<dashmap::DashMap<Uuid, Arc<AtomicBool>>> = Lazy::new(|| dashmap::DashMap::new());
+
+/// Remove an audio source from the registry by UUID
+pub fn remove_audio_source(uuid: &Uuid) {
+    AUDIO_SOURCE_REGISTRY.remove(uuid);
+}
+
+/// Call this when a new bot starts to poke all other bots to send a single silent frame if stuck
+pub fn poke_all_audio_sources() {
+    for entry in AUDIO_SOURCE_REGISTRY.iter() {
+        entry.value().store(true, Ordering::SeqCst);
+    }
 }
 
 
@@ -192,6 +218,20 @@ impl io::Read for PlayerAudioSource {
             }
             if written == 0 {
                 // If we just failed to send frames, only return 1 frame next time
+                // If we've been poked, set the silent_countdown to 3
+                if self.should_send_silence.swap(false, Ordering::SeqCst) {
+                    self.silent_countdown = 3;
+                }
+                // If countdown is active, send a silent frame and decrement
+                if self.silent_countdown > 0 {
+                    let silent_frame = [0f32; 960];
+                    let mut bytes_written = 0;
+                    for sample in silent_frame.iter() {
+                        bytes_written += buf.write(&sample.to_le_bytes())?;
+                    }
+                    self.silent_countdown -= 1;
+                    return Ok(bytes_written);
+                }
                 self.prev_zero = true;
                 std::thread::sleep(std::time::Duration::from_millis(2));
                 continue;

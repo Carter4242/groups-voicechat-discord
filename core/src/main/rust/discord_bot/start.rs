@@ -73,7 +73,10 @@ impl super::DiscordBot {
                 call.add_global_event(CoreEvent::VoiceTick.into(), handler.clone());
                 call.add_global_event(CoreEvent::SpeakingStateUpdate.into(), handler);
 
-                call.play_only_input(create_playable_input(player_to_discord_buffers, audio_shutdown)?);
+                let input = create_playable_input(player_to_discord_buffers, audio_shutdown)?;
+                let (input, audio_source_uuid) = input;
+                *bot_for_async.audio_source_uuid.lock().unwrap() = Some(audio_source_uuid);
+                call.play_only_input(input);
 
                 eyre::Ok(())
             }) {

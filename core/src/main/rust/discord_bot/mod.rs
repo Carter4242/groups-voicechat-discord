@@ -64,6 +64,8 @@ pub struct DiscordBot {
     pub java_bot_obj: GlobalRef,
     /// Map of user_id -> username, updated when users join a channel
     user_id_to_username: Arc<DashMap<u64, String>>,
+    /// UUID for the audio source, used for poking after start
+    audio_source_uuid: Arc<StdMutex<Option<Uuid>>>,
 }
 
 enum State {
@@ -104,7 +106,13 @@ impl DiscordBot {
             java_vm,
             java_bot_obj,
             user_id_to_username: Arc::new(DashMap::new()),
+            audio_source_uuid: Arc::new(StdMutex::new(None)),
         }
+    }
+
+    /// Returns the UUID of the audio source, if set
+    pub fn get_audio_source_uuid(&self) -> Option<Uuid> {
+        *self.audio_source_uuid.lock().unwrap()
     }
 
     // Looks up the username for a given user_id from the local map
@@ -318,6 +326,10 @@ impl DiscordBot {
         };
         info!("Stopping DiscordBot: transitioning from Started to LoggedIn, setting audio_shutdown to true");
         self.audio_shutdown.store(true, Ordering::SeqCst);
+        // Remove audio source UUID from registry if present
+        if let Some(uuid) = self.get_audio_source_uuid() {
+            crate::discord_bot::discord_speak::remove_audio_source(&uuid);
+        }
         *state_lock = match &*state_lock {
             State::Started { http, .. } => State::LoggedIn { http: http.clone() },
             _ => unreachable!(),

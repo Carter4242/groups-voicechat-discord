@@ -96,6 +96,11 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1start(
                 .expect("Couldn't create java string! Please file a GitHub issue")
         })
         .unwrap_or_throw(&mut env, value_on_throw);
+
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            crate::discord_bot::discord_speak::poke_all_audio_sources();
+        });
     tracing::info!("JNI DiscordBot__1start returning result");
     let _ = Arc::into_raw(discord_bot);
     result
@@ -118,7 +123,10 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1free(
     _obj: jobject,
     ptr: jlong,
 ) {
-    let _ = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+    if let Some(uuid) = discord_bot.get_audio_source_uuid() {
+        crate::discord_bot::discord_speak::remove_audio_source(&uuid);
+    }
 }
 
 // JNI: Create Discord voice channel for this bot instance
