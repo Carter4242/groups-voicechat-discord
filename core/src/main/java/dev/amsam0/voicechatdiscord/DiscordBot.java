@@ -507,6 +507,39 @@ public final class DiscordBot {
             return;
         }
 
+        // If user is switching channels, show both leave and join messages
+        Long previousChannelId = GroupManager.discordUserChannelMap.get(discordUserId);
+        boolean isSwitching = joined && previousChannelId != null && previousChannelId != 0L && previousChannelId != channelId;
+
+        // If switching, first send leave message for old channel
+        if (isSwitching) {
+            // Remove from old channel
+            Long oldChannelId = GroupManager.discordUserChannelMap.remove(discordUserId);
+            GroupManager.discordUserNameMap.remove(discordUserId);
+            if (oldChannelId != null && oldChannelId != 0L) {
+                // Find the group for the old channel
+                UUID oldGroupId = null;
+                for (var entry : GroupManager.groupBotMap.entrySet()) {
+                    DiscordBot bot = entry.getValue();
+                    if (bot != null && bot.discordChannelId != null && bot.discordChannelId.equals(oldChannelId)) {
+                        oldGroupId = entry.getKey();
+                        break;
+                    }
+                }
+                if (oldGroupId != null) {
+                    var oldPlayers = GroupManager.groupPlayerMap.get(oldGroupId);
+                    if (oldPlayers != null && !oldPlayers.isEmpty()) {
+                        Component prefix = Component.blue("[Discord] ");
+                        Component name = Component.gold(username);
+                        Component action = Component.red(" left the Discord voice channel.");
+                        for (var player : oldPlayers) {
+                            platform.sendMessage(player, prefix, name, action);
+                        }
+                    }
+                }
+            }
+        }
+
         platform.info("[DiscordBot] User " + (joined ? "joined" : "left") + " Discord VC: " + username + " (ID: " + discordUserId + ") in channel " + channelId);
 
         Long groupChannelId = channelId;
