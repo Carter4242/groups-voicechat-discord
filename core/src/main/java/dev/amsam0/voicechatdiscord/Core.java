@@ -192,14 +192,27 @@ public final class Core {
     }
 
     public static void clearBots() {
+        platform.info("Stopping all Discord bots...");
         bots.forEach(discordBot -> {
+            platform.info("Stopping bot (vcId=" + discordBot.getDiscordChannelId() + ")...");
             discordBot.stop();
+        });
+        platform.info("Waiting for all delete threads to finish...");
+        bots.forEach(discordBot -> {
+            platform.info("Waiting for delete thread (vcId=" + discordBot.getDiscordChannelId() + ")...");
+            discordBot.waitForDeleteThread();
+        });
+        platform.info("Freeing all Discord bots...");
+        bots.forEach(discordBot -> {
+            platform.info("Freeing bot (vcId=" + discordBot.getDiscordChannelId() + ")...");
             discordBot.free();
         });
         bots.clear();
 
+        platform.info("Clearing group player, bot, and audio channel maps...");
         GroupManager.groupPlayerMap.clear();
         GroupManager.groupBotMap.clear();
         GroupManager.groupAudioChannels.clear();
+        platform.info("All bots and group maps cleared.");
     }
 }
