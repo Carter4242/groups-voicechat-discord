@@ -22,7 +22,7 @@ public final class DiscordBot {
     private volatile boolean freed = false;
     // Discord connection and bridging logic
     private final long categoryId;
-    private final long ptr;
+    private volatile long ptr;
 
     // Store the Discord voice channel ID for this group
     private volatile Long discordChannelId = null;
@@ -45,8 +45,8 @@ public final class DiscordBot {
      * @param callback Callback to receive the channel ID (or null)
      */
     public void createDiscordVoiceChannelAsync(String groupName, java.util.function.Consumer<Long> callback) {
-        if (freed) {
-            platform.warn("Attempted to create Discord channel after bot was freed");
+        if (freed || ptr == 0) {
+            platform.warn("Attempted to create Discord channel after bot was freed or ptr was invalid");
             callback.accept(null);
             return;
         }
@@ -82,8 +82,10 @@ public final class DiscordBot {
     /**
      * Asynchronously deletes the Discord voice channel associated with this bot/group, then runs the callback if provided.
      */
+    private Thread deleteThread;
+
     public void deleteDiscordVoiceChannelAsync(Runnable afterDelete) {
-        if (freed) {
+        if (freed || ptr == 0) {
             if (afterDelete != null) afterDelete.run();
             return;
         }
@@ -94,7 +96,7 @@ public final class DiscordBot {
             return;
         }
         platform.info("Deleting Discord voice channel with ID " + channelIdToDelete);
-        new Thread(() -> {
+        deleteThread = new Thread(() -> {
             try {
                 _deleteDiscordVoiceChannel(ptr);
                 platform.info("Deleted Discord voice channel with ID " + channelIdToDelete + " for categoryId=" + categoryId);
@@ -107,7 +109,20 @@ public final class DiscordBot {
                 }
                 if (afterDelete != null) afterDelete.run();
             }
-        }, "DiscordChannelDeleteThread").start();
+        }, "DiscordChannelDeleteThread");
+        deleteThread.start();
+    }
+
+    /**
+     * Waits for the delete thread to finish, if it exists.
+     */
+    public void waitForDeleteThread() {
+        if (deleteThread != null) {
+            try {
+                deleteThread.join(8000); // Wait up to 8 seconds
+            } catch (InterruptedException ignored) {}
+            deleteThread = null;
+        }
     }
 
     /**
@@ -116,8 +131,8 @@ public final class DiscordBot {
      * @param groupName The group name
      */
     public void updateDiscordVoiceChannelNameAsync(int playerCount, String groupName) {
-        if (freed) {
-            platform.warn("Attempted to update Discord channel name after bot was freed");
+        if (freed || ptr == 0) {
+            platform.warn("Attempted to update Discord channel name after bot was freed or ptr was invalid");
             return;
         }
         final Long channelIdToUpdate = discordChannelId;
@@ -149,8 +164,8 @@ public final class DiscordBot {
      * @param message The message to send
      */
     public void sendDiscordTextMessageAsync(String message) {
-        if (freed) {
-            platform.warn("Attempted to send Discord text message after bot was freed");
+        if (freed || ptr == 0) {
+            platform.warn("Attempted to send Discord text message after bot was freed or ptr was invalid");
             return;
         }
         final Long channelIdToSend = discordChannelId;
@@ -174,8 +189,8 @@ public final class DiscordBot {
      * Starts the background thread for Discord audio bridging.
      */
     public void startDiscordAudioThread(UUID groupId) {
-        if (freed) {
-            platform.warn("Attempted to start audio thread after bot was freed");
+        if (freed || ptr == 0) {
+            platform.warn("Attempted to start audio thread after bot was freed or ptr was invalid");
             return;
         }
         running = true;
@@ -316,12 +331,20 @@ public final class DiscordBot {
     private native boolean _isStarted(long ptr);
 
     public boolean isStarted() {
+        if (freed || ptr == 0) {
+            platform.warn("Attempted to check isStarted after bot was freed or ptr was invalid");
+            return false;
+        }
         return _isStarted(ptr);
     }
 
     private native void _logIn(long ptr) throws Throwable;
 
     public boolean logIn() {
+        if (freed || ptr == 0) {
+            platform.warn("Attempted to logIn after bot was freed or ptr was invalid");
+            return false;
+        }
         try {
             _logIn(ptr);
             platform.debug("Logged into the bot (categoryId=" + categoryId + ")");
@@ -335,6 +358,10 @@ public final class DiscordBot {
     private native String _start(long ptr) throws Throwable;
 
     public void start() {
+        if (freed || ptr == 0) {
+            platform.warn("Attempted to start after bot was freed or ptr was invalid");
+            return;
+        }
         try {
             String vcName = _start(ptr);
             platform.info("Started voice chat for group in channel " + vcName + " with bot (categoryId=" + categoryId + ")");
@@ -354,6 +381,10 @@ public final class DiscordBot {
      * @param deleteChannel If true, deletes the Discord voice channel; if false, leaves it intact.
      */
     public void stop(boolean deleteChannel) {
+        if (freed || ptr == 0) {
+            platform.warn("Attempted to stop after bot was freed or ptr was invalid");
+            return;
+        }
         try {
             stopDiscordAudioThread();
             if (deleteChannel) {
@@ -387,7 +418,10 @@ public final class DiscordBot {
     public void free() {
         freed = true;
         stopDiscordAudioThread();
-        _free(ptr);
+        if (ptr != 0) {
+            _free(ptr);
+            ptr = 0;
+        }
     }
 
     private native void _addAudioToHearingBuffer(long ptr, byte[] groupIdBytes, byte[] rawOpusData, long sequenceNumber);
@@ -443,8 +477,8 @@ public final class DiscordBot {
      * Receives a group audio packet from Minecraft and sends it to Discord.
      */
     public void handlePacket(StaticSoundPacket packet, ServerPlayer player) {
-        if (freed) {
-            platform.warn("handlePacket called after bot was freed");
+        if (freed || ptr == 0) {
+            platform.warn("handlePacket called after bot was freed or ptr was invalid");
             return;
         }
         if (player == null) {
@@ -480,6 +514,10 @@ public final class DiscordBot {
      * Disconnects the bot from the Discord voice channel, but does NOT delete the channel.
      */
     public void disconnect() {
+        if (freed || ptr == 0) {
+            platform.warn("Attempted to disconnect after bot was freed or ptr was invalid");
+            return;
+        }
         try {
             _disconnect(ptr);
             platform.info("Disconnected Discord bot (categoryId=" + categoryId + ") from voice channel (without deleting). ");
