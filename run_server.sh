@@ -67,12 +67,16 @@ else
   exit 1
 fi
 
+echo -e "${yellow}Server stopped. Press enter to exit...${clear}"
 echo -e "${green}Running version $minecraftVersion on platform $platform${clear}"
 cd "$platform/run/$minecraftVersion"
 java -Xms4G -Xmx4G -jar server.jar --nogui
+exit_code=$?
 
-# If --no-exit flag is set, pause at the end
-if [ "$NO_EXIT" = "1" ]; then
-  echo -e "${yellow}Server stopped. Press enter to exit...${clear}"
-  read
+if [ $exit_code -ne 0 ]; then
+  echo -e "${red}Server crashed or exited with error code $exit_code${clear}"
+  echo -e "${yellow}Check for crash logs (e.g., hs_err_pid*.log) in this directory.${clear}"
 fi
+
+echo -e "${yellow}Server stopped. Press enter to exit...${clear}"
+read
