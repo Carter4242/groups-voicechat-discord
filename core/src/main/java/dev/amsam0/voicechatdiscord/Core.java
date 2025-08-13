@@ -17,6 +17,8 @@ import java.util.Set;
  * Core code between Paper.
  */
 public final class Core {
+    // Cached discord icon  
+    private static int[][] discordIcon = null;
     // Set of Discord user IDs (as Long) that are bots and should be ignored for join/leave
     public static final Set<Long> botUserIds = new HashSet<>();
     public static VoicechatServerApi api; // Initiated by VoicechatPlugin
@@ -163,6 +165,29 @@ public final class Core {
             setDebugLevel(debugLevel);
         } catch (ClassCastException e) {
             platform.error("Please make sure the debug_level option is a valid integer");
+        }
+    }
+
+    /**
+     * Loads and caches the discord_category.png icon as int[16][16].
+     * Returns null if not found or not 16x16.
+     */
+    public static int[][] loadDiscordIcon() {
+        if (discordIcon != null) return discordIcon;
+        try (java.io.InputStream in = Core.class.getClassLoader().getResourceAsStream("discord_category.png")) {
+            if (in == null) return null;
+            javax.imageio.ImageIO.setUseCache(false);
+            java.awt.image.BufferedImage img = javax.imageio.ImageIO.read(in);
+            if (img == null || img.getWidth() != 16 || img.getHeight() != 16) return null;
+            int[][] icon = new int[16][16];
+            for (int x = 0; x < 16; x++)
+                for (int y = 0; y < 16; y++)
+                    icon[x][y] = img.getRGB(x, y);
+            discordIcon = icon;
+            return icon;
+        } catch (Exception e) {
+            if (platform != null) platform.error("Failed to load discord_category.png", e);
+            return null;
         }
     }
 

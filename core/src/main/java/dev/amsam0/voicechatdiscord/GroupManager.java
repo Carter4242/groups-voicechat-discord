@@ -18,24 +18,27 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static dev.amsam0.voicechatdiscord.Core.api;
 import static dev.amsam0.voicechatdiscord.Core.platform;
 
 public final class GroupManager {
+
+    // Discord userId -> current channelId
+    public static final Map<Long, Long> discordUserChannelMap = new ConcurrentHashMap<>();
+    // Discord userId -> username
+    public static final Map<Long, String> discordUserNameMap = new ConcurrentHashMap<>();
+
+    // Map groupId -> List of players
+    public static final Map<UUID, List<ServerPlayer>> groupPlayerMap = new HashMap<>();
     // Map groupId -> owner UUID
     public static final Map<UUID, UUID> groupOwnerMap = new HashMap<>();
-    // Discord userId -> channelId (for all bots/groups)
-    public static final Map<Long, Long> discordUserChannelMap = new ConcurrentHashMap<>();
-    // Discord userId -> username (for all bots/groups)
-    public static final Map<Long, String> discordUserNameMap = new ConcurrentHashMap<>();
     // Queue join events for groups whose Discord channel is still being created
     public static final Map<UUID, List<JoinGroupEvent>> pendingJoinEvents = new HashMap<>();
-    // Map GroupId -> List of players
-    public static final Map<UUID, List<ServerPlayer>> groupPlayerMap = new HashMap<>();
+
+    // Map groupId -> (player UUID -> (username -> StaticAudioChannel))
+    public static final Map<UUID, Map<UUID, Map<String, StaticAudioChannel>>> groupAudioChannels = new HashMap<>();
+
     // Map groupId -> DiscordBot
     public static final Map<UUID, DiscordBot> groupBotMap = new HashMap<>();
-    // Map: groupId -> (player UUID -> List<StaticAudioChannel>)
-    public static final Map<UUID, Map<UUID, List<StaticAudioChannel>>> groupAudioChannels = new HashMap<>();
     // Track groups pending Discord channel creation
     public static final Map<UUID, DiscordBot> pendingGroupCreations = new HashMap<>();
     // Track groups removed before channel creation completes
@@ -49,20 +52,32 @@ public final class GroupManager {
 
     private static void handlePlayerJoin(Group group, ServerPlayer player, VoicechatConnection connection, DiscordBot bot) {
         platform.info("[handlePlayerJoin] Handling join for player " + player.getUuid() + " in group " + group.getId());
-        var level = player.getServerLevel();
-        var randomChannelId = UUID.randomUUID();
-        var staticChannel = api.createStaticAudioChannel(randomChannelId, level, connection);
-        if (staticChannel != null) {
-            groupAudioChannels
-                .computeIfAbsent(group.getId(), k -> new HashMap<>())
-                .computeIfAbsent(player.getUuid(), k -> new ArrayList<>())
-                .add(staticChannel);
-            platform.info("Created StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId() + " (channelId=" + randomChannelId + ")");
-        } else {
-            platform.error("Failed to create StaticAudioChannel for player " + player.getUuid() + " in group " + group.getId() + " (channelId=" + randomChannelId + ")");
-        }
-
+        
+        // Create a StaticAudioChannel for every Discord user currently in the VC for this group
         if (bot != null) {
+            Long discordChannelId = bot.getDiscordChannelId();
+            if (discordChannelId != null) {
+                for (var entry : discordUserChannelMap.entrySet()) {
+                    if (entry.getValue() != null && entry.getValue().equals(discordChannelId)) {
+                        String username = discordUserNameMap.get(entry.getKey());
+                        if (username != null && !username.isEmpty()) {
+                            var playerId = player.getUuid();
+                            var level = player.getServerLevel();
+                            var staticChannel = Core.api.createStaticAudioChannel(UUID.randomUUID(), level, connection);
+                            if (staticChannel != null) {
+                                groupAudioChannels
+                                    .computeIfAbsent(group.getId(), k -> new HashMap<>())
+                                    .computeIfAbsent(playerId, k -> new HashMap<>())
+                                    .put(username, staticChannel);
+                                platform.info("Created StaticAudioChannel for Discord user '" + username + "' and player " + playerId + " in group " + group.getId());
+                            } else {
+                                platform.error("Failed to create StaticAudioChannel for Discord user '" + username + "' and player " + playerId + " in group " + group.getId());
+                            }
+                        }
+                    }
+                }
+            }
+
             String joinMsg = ">> **" + platform.getName(player) + "** joined the group!";
             bot.sendDiscordTextMessageAsync(joinMsg);
         }
@@ -144,8 +159,9 @@ public final class GroupManager {
 
         List<ServerPlayer> players = getPlayers(group);
         players.removeIf(p -> p.getUuid().equals(player.getUuid()));
-        // Remove StaticAudioChannel for this player if present
-        Map<UUID, List<StaticAudioChannel>> channels = groupAudioChannels.get(group.getId());
+
+        // Remove all StaticAudioChannels for this player if present
+        Map<UUID, Map<String, StaticAudioChannel>> channels = groupAudioChannels.get(group.getId());
         if (channels != null) {
             var removed = channels.remove(player.getUuid());
             if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + player.getUuid() + " in group " + group.getId());
@@ -273,7 +289,36 @@ public final class GroupManager {
             platform.info("onGroupRemoved: Group " + groupId + " is pending Discord channel creation. Will delete after creation.");
         }
 
-        DiscordBot bot = groupBotMap.remove(groupId);
+        // Clean up all Discord users in the group's VC as if they left
+        DiscordBot bot = groupBotMap.get(groupId);
+        if (bot != null) {
+            Long discordChannelId = bot.getDiscordChannelId();
+            if (discordChannelId != null) {
+                // Find all Discord users in this VC
+                java.util.List<Long> usersInChannel = new java.util.ArrayList<>();
+                for (var entry : discordUserChannelMap.entrySet()) {
+                    if (discordChannelId.equals(entry.getValue())) {
+                        usersInChannel.add(entry.getKey());
+                    }
+                }
+                for (Long discordUserId : usersInChannel) {
+                    String username = discordUserNameMap.get(discordUserId);
+                    if (username != null) {
+                        // Simulate leave: remove channels and unregister category
+                        DiscordBot.removeDiscordUserChannelsFromGroup(groupId, username);
+                        String categoryId = DiscordBot.discordUserCategoryMap.remove(discordUserId);
+                        if (categoryId != null) {
+                            Core.api.unregisterVolumeCategory(categoryId);
+                            platform.info("Unregistered volume category for Discord user '" + username + "' (ID: " + discordUserId + ")");
+                        }
+                    }
+                    discordUserChannelMap.remove(discordUserId);
+                    discordUserNameMap.remove(discordUserId);
+                }
+            }
+        }
+
+        bot = groupBotMap.remove(groupId);
         if (bot != null) {
             platform.info("onGroupRemoved: Stopping Discord bot for group: " + group.getName() + ")");
             bot.stop();

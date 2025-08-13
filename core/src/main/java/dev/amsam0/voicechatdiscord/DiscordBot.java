@@ -9,6 +9,8 @@ import java.util.UUID;
 import static dev.amsam0.voicechatdiscord.Core.platform;
 
 public final class DiscordBot {
+    // Map of Discord user IDs to their category IDs (as String)
+    public static final java.util.Map<Long, String> discordUserCategoryMap = new java.util.HashMap<>();
     // Track the last set of talking Discord users shown to the group
     private java.util.Set<String> lastSentTalkingUsers = java.util.Collections.emptySet();
     private long lastSentTime = 0L;
@@ -258,45 +260,39 @@ public final class DiscordBot {
         }
         
         var groupChannels = GroupManager.groupAudioChannels.get(groupId);
-        for (var entry : groupChannels.entrySet()) {
-            UUID playerId = entry.getKey();
-            var channelList = entry.getValue();
-            if (channelList == null) {
-                channelList = new java.util.ArrayList<>();
-                groupChannels.put(playerId, channelList);
-            }
-
-            for (int i = 0; i < userPackets.length; i++) {
-                byte[][] tuple = userPackets[i];
-                if (tuple == null || tuple.length != 2) continue;
-                byte[] opusData = tuple[1];
-
-                if (i >= channelList.size() || channelList.get(i) == null || channelList.get(i).isClosed()) {
-                    // Only fetch these if we need to create a new channel
+        if (groupChannels == null) return;
+        for (int i = 0; i < userPackets.length; i++) {
+            byte[][] tuple = userPackets[i];
+            if (tuple == null || tuple.length != 2) continue;
+            String username = new String(tuple[0]);
+            byte[] opusData = tuple[1];
+            if (opusData == null || opusData.length == 0 || username == null || username.isEmpty()) continue;
+            for (var entry : groupChannels.entrySet()) {
+                var playerId = entry.getKey();
+                var playerChannels = entry.getValue();
+                var channel = playerChannels != null ? playerChannels.get(username) : null;
+                if (channel == null) {
+                    // Create channel on the fly
                     var connection = Core.api.getConnectionOf(playerId);
-                    var player = connection != null ? connection.getPlayer() : null;
                     var group = Core.api.getGroup(groupId);
+                    var player = connection != null ? connection.getPlayer() : null;
                     var level = player != null ? player.getServerLevel() : null;
                     if (group != null && level != null && connection != null) {
-                        // Use a random UUID for the channelId instead of groupId
                         var randomChannelId = UUID.randomUUID();
                         var newChannel = Core.api.createStaticAudioChannel(randomChannelId, level, connection);
                         if (newChannel != null) {
-                            if (i < channelList.size()) {
-                                channelList.set(i, newChannel);
-                            } else {
-                                channelList.add(newChannel);
-                            }
+                            playerChannels.put(username, newChannel);
+                            channel = newChannel;
+                            platform.info("[sendDiscordAudioToGroup] Created StaticAudioChannel on the fly for player " + playerId + ", username '" + username + "' in group " + groupId);
                         } else {
-                            platform.error("Failed to create StaticAudioChannel for player " + playerId + " in group " + groupId + " for packet index " + i);
+                            platform.error("[sendDiscordAudioToGroup] Failed to create StaticAudioChannel for player " + playerId + ", username '" + username + "' in group " + groupId);
                         }
                     } else {
-                        platform.error("Cannot create StaticAudioChannel: missing group, level, or connection for player " + playerId);
+                        platform.error("[sendDiscordAudioToGroup] Cannot create StaticAudioChannel: missing group, level, or connection for player " + playerId);
                         continue;
                     }
                 }
-                var channel = channelList.get(i);
-                if (channel != null && !channel.isClosed() && opusData != null && opusData.length > 0) {
+                if (channel != null && !channel.isClosed()) {
                     channel.send(opusData);
                 }
             }
@@ -496,6 +492,37 @@ public final class DiscordBot {
     private native void _disconnect(long ptr);
 
     /**
+     * Removes all StaticAudioChannels for a Discord username from a group for all players.
+     */
+    public static void removeDiscordUserChannelsFromGroup(UUID groupId, String username) {
+        var groupChannels = GroupManager.groupAudioChannels.get(groupId);
+        if (groupChannels != null) {
+            for (var playerChannels : groupChannels.values()) {
+                playerChannels.remove(username);
+            }
+        }
+    }
+
+    /**
+     * Encodes a long as a base-26 string using only a-z, max 16 chars.
+     */
+    private static String toBase26CategoryId(long id) {
+        if (id == 0) return "a";
+        StringBuilder sb = new StringBuilder();
+        long n = id;
+        while (n > 0) {
+            int rem = (int)(n % 26);
+            sb.append((char)('a' + rem));
+            n /= 26;
+        }
+        String result = sb.reverse().toString();
+        if (result.length() > 16) {
+            result = result.substring(result.length() - 16);
+        }
+        return result;
+    }
+
+    /**
      * Called from Rust when a Discord user's voice state changes (join/leave VC).
      * @param discordUserId The Discord user ID (as a long)
      * @param username The Discord username
@@ -507,8 +534,28 @@ public final class DiscordBot {
             return;
         }
 
-        // If user is switching channels, show both leave and join messages
+        // Build set of channel IDs the bots are currently in
+        java.util.Set<Long> botChannelIds = new java.util.HashSet<>();
+        for (var bot : GroupManager.groupBotMap.values()) {
+            Long botChan = bot != null ? bot.getDiscordChannelId() : null;
+            if (botChan != null) botChannelIds.add(botChan);
+        }
+
+        // Only process if the new channel or previous channel is one we care about
         Long previousChannelId = GroupManager.discordUserChannelMap.get(discordUserId);
+        boolean caresAboutNew = channelId != 0L && botChannelIds.contains(channelId);
+        boolean caresAboutOld = previousChannelId != null && previousChannelId != 0L && botChannelIds.contains(previousChannelId);
+
+        // If user is switching from a tracked channel to an untracked one, treat as leaving; otherwise, ignore if neither is tracked
+        if (!caresAboutNew) {
+            if (caresAboutOld) {
+                channelId = 0L;
+            } else {
+                return;
+            }
+        }
+
+        // If user is switching channels, show both leave and join messages
         boolean isSwitching = joined && previousChannelId != null && previousChannelId != 0L && previousChannelId != channelId;
 
         // If switching, first send leave message for old channel
@@ -527,6 +574,7 @@ public final class DiscordBot {
                     }
                 }
                 if (oldGroupId != null) {
+                    removeDiscordUserChannelsFromGroup(oldGroupId, username);
                     var oldPlayers = GroupManager.groupPlayerMap.get(oldGroupId);
                     if (oldPlayers != null && !oldPlayers.isEmpty()) {
                         Component prefix = Component.blue("[Discord] ");
@@ -542,22 +590,16 @@ public final class DiscordBot {
 
         platform.info("[DiscordBot] User " + (joined ? "joined" : "left") + " Discord VC: " + username + " (ID: " + discordUserId + ") in channel " + channelId);
 
-        Long groupChannelId = channelId;
+        Long groupChannelId;
         if (joined) {
-            // If already in the correct channel, skip (avoid duplicate join event)
-            Long existing = GroupManager.discordUserChannelMap.get(discordUserId);
-            if (existing != null && existing.equals(channelId)) {
-                platform.debug("[DiscordBot] User " + discordUserId + " already in channel " + channelId + ", skipping join event.");
-                return;
-            }
-            GroupManager.discordUserChannelMap.put(discordUserId, channelId);
-            GroupManager.discordUserNameMap.put(discordUserId, username);
+            groupChannelId = channelId;
         } else {
-            // On leave, look up the last channel they were in
-            groupChannelId = GroupManager.discordUserChannelMap.remove(discordUserId);
-            GroupManager.discordUserNameMap.remove(discordUserId);
-            if (groupChannelId == null || groupChannelId == 0L) {
-                platform.info("[DiscordBot] No previous channel found for user " + discordUserId + ", cannot send leave message.");
+            // On leave, use previous channel
+            groupChannelId = previousChannelId;
+            // Optimization: if user is already not present, skip all work
+            Long existing = GroupManager.discordUserChannelMap.get(discordUserId);
+            if (existing == null || existing == 0L) {
+                platform.debug("[DiscordBot] User " + discordUserId + " already not in any channel, skipping leave event.");
                 return;
             }
         }
@@ -574,6 +616,76 @@ public final class DiscordBot {
         if (foundGroupId == null) {
             platform.info("[DiscordBot] No group found for Discord channel ID " + groupChannelId);
             return;
+        }
+
+        if (joined) {
+            // If already in the correct channel, skip (avoid duplicate join event)
+            Long existing = GroupManager.discordUserChannelMap.get(discordUserId);
+            if (existing != null && existing.equals(channelId)) {
+                platform.debug("[DiscordBot] User " + discordUserId + " already in channel " + channelId + ", skipping join event.");
+                return;
+            }
+            GroupManager.discordUserChannelMap.put(discordUserId, channelId);
+            GroupManager.discordUserNameMap.put(discordUserId, username);
+
+            // Create/register a unique category for this Discord user if not already present
+            // Use a base-26 (a-z) encoding for the category ID, max 16 chars
+            String categoryId = toBase26CategoryId(discordUserId);
+            if (!discordUserCategoryMap.containsKey(discordUserId)) {
+                var icon = Core.loadDiscordIcon();
+                var category = Core.api.volumeCategoryBuilder()
+                    .setId(categoryId)
+                    .setName(username)
+                    .setDescription("Volume for Discord user " + username)
+                    .setIcon(icon)
+                    .build();
+                Core.api.registerVolumeCategory(category);
+                discordUserCategoryMap.put(discordUserId, categoryId);
+                platform.info("Registered volume category for Discord user '" + username + "' (ID: " + discordUserId + ", catId: " + categoryId + ")");
+            }
+
+            // Create a StaticAudioChannel for this Discord user for every player in the group, and assign the category
+            var groupPlayers = GroupManager.groupPlayerMap.get(foundGroupId);
+            if (groupPlayers != null) {
+                for (var player : groupPlayers) {
+                    var playerId = player.getUuid();
+                    var connection = Core.api.getConnectionOf(playerId);
+                    var level = player.getServerLevel();
+                    if (connection != null && level != null) {
+                        var channelIdUuid = java.util.UUID.randomUUID();
+                        var staticChannel = Core.api.createStaticAudioChannel(channelIdUuid, level, connection);
+                        if (staticChannel != null) {
+                            staticChannel.setCategory(categoryId);
+                            GroupManager.groupAudioChannels
+                                .computeIfAbsent(foundGroupId, k -> new java.util.HashMap<>())
+                                .computeIfAbsent(playerId, k -> new java.util.HashMap<>())
+                                .put(username, staticChannel);
+                            platform.info("Created StaticAudioChannel for Discord user '" + username + "' and player " + playerId + " in group " + foundGroupId + " with category " + categoryId);
+                        } else {
+                            platform.error("Failed to create StaticAudioChannel for Discord user '" + username + "' and player " + playerId + " in group " + foundGroupId);
+                        }
+                    }
+                }
+            }
+        } else {
+            // On leave, look up the last channel they were in
+            GroupManager.discordUserChannelMap.remove(discordUserId);
+            GroupManager.discordUserNameMap.remove(discordUserId);
+            if (groupChannelId == null || groupChannelId == 0L) {
+                platform.info("[DiscordBot] No previous channel found for user " + discordUserId + ", cannot send leave message.");
+                return;
+            }
+
+            // Remove all StaticAudioChannels for this Discord user for every player in the group
+            removeDiscordUserChannelsFromGroup(foundGroupId, username);
+            // Only unregister the category if the new channelId is zero (user left VC, not just switched)
+            if (channelId == 0L) {
+                String categoryId = discordUserCategoryMap.remove(discordUserId);
+                if (categoryId != null) {
+                    Core.api.unregisterVolumeCategory(categoryId);
+                    platform.info("Unregistered volume category for Discord user '" + username + "' (ID: " + discordUserId + ")");
+                }
+            }
         }
 
         // Get all players in the group and send them a message
