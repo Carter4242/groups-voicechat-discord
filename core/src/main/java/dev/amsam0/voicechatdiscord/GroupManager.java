@@ -197,14 +197,6 @@ public final class GroupManager {
         // Track the owner of the group
         groupOwnerMap.put(groupId, player.getUuid());
 
-        // Only allow two specific users to create Discord groups
-        UUID allowed1 = UUID.fromString("aa1afe1c-0e1d-4b90-9208-1c703f818fdd");
-        UUID allowed2 = UUID.fromString("bd50ddce-5d31-4380-b1cc-4e11eb78659a");
-        if (!player.getUuid().equals(allowed1) && !player.getUuid().equals(allowed2)) {
-            platform.info("Not adding group " + group.getName() + " (" + groupId + ") to Discord: creator " + player.getUuid() + " is not allowed.");
-            return;
-        }
-
         if (!Core.bots.isEmpty()) {
             DiscordBot found = null;
             for (DiscordBot candidate : Core.bots) {
