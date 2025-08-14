@@ -67,7 +67,6 @@ else
   exit 1
 fi
 
-echo -e "${yellow}Server stopped. Press enter to exit...${clear}"
 echo -e "${green}Running version $minecraftVersion on platform $platform${clear}"
 cd "$platform/run/$minecraftVersion"
 java -Xms4G -Xmx4G -jar server.jar --nogui

@@ -10,8 +10,27 @@ use crate::discord_bot::State;
 use crate::ResultExt;
 
 use super::DiscordBot;
+use std::any::Any;
 
 use jni::objects::JObject;
+
+fn log_jni_panic(function: &str, ptr: jlong, payload: &Box<dyn Any + Send>) {
+    let thread_id = std::thread::current().id();
+    let panic_msg = if let Some(s) = payload.downcast_ref::<&str>() {
+        *s
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.as_str()
+    } else {
+        "<unknown panic payload>"
+    };
+    tracing::error!(
+        function = function,
+        ptr = ptr,
+        thread = ?thread_id,
+        panic = %panic_msg,
+        "Rust panic in {function} JNI call"
+    );
+}
 
 #[no_mangle]
 pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1new<'local>(
@@ -20,21 +39,30 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1new<'local>
     token: JString<'local>,
     category_id: jlong,
 ) -> jlong {
-    let token = env
-        .get_string(&token)
-        .expect("Couldn't get java string! Please file a GitHub issue")
-        .into();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let token = env
+            .get_string(&token)
+            .expect("Couldn't get java string! Please file a GitHub issue")
+            .into();
 
-    let java_vm = env.get_java_vm().expect("Couldn't get JavaVM");
-    let java_bot_obj = env.new_global_ref(this).expect("Couldn't create global ref");
+        let java_vm = env.get_java_vm().expect("Couldn't get JavaVM");
+        let java_bot_obj = env.new_global_ref(this).expect("Couldn't create global ref");
 
-    let discord_bot = Arc::new(DiscordBot::new(
-        token,
-        ChannelId::new(category_id as u64),
-        Arc::new(java_vm),
-        java_bot_obj,
-    ));
-    Arc::into_raw(discord_bot) as jlong
+        let discord_bot = Arc::new(DiscordBot::new(
+            token,
+            ChannelId::new(category_id as u64),
+            Arc::new(java_vm),
+            java_bot_obj,
+        ));
+        Arc::into_raw(discord_bot) as jlong
+    }));
+    match result {
+        Ok(val) => val,
+        Err(payload) => {
+            log_jni_panic("DiscordBot__1new", 0, &payload);
+            0
+        }
+    }
 }
 
 #[no_mangle]
@@ -43,16 +71,25 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1isStarted(
     _obj: jobject,
     ptr: jlong,
 ) -> jboolean {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
-    let result = {
-        if let Some(lock) = discord_bot.state.try_read() {
-            matches!(*lock, State::Started { .. }) as jboolean
-        } else {
-            0 as jboolean
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+        let result = {
+            if let Some(lock) = discord_bot.state.try_read() {
+                matches!(*lock, State::Started { .. }) as jboolean
+            } else {
+                0 as jboolean
+            }
+        };
+        let _ = Arc::into_raw(discord_bot);
+        result
+    }));
+    match result {
+        Ok(val) => val,
+        Err(payload) => {
+            log_jni_panic("DiscordBot__1isStarted", ptr, &payload);
+            0
         }
-    };
-    let _ = Arc::into_raw(discord_bot);
-    result
+    }
 }
 
 #[no_mangle]
@@ -61,9 +98,14 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1logIn(
     _obj: jobject,
     ptr: jlong,
 ) {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
-    discord_bot.log_in().discard_or_throw(&mut env);
-    let _ = Arc::into_raw(discord_bot);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+        discord_bot.log_in().discard_or_throw(&mut env);
+        let _ = Arc::into_raw(discord_bot);
+    }));
+    if let Err(payload) = result {
+        log_jni_panic("DiscordBot__1logIn", ptr, &payload);
+    }
 }
 
 #[no_mangle]
@@ -72,38 +114,47 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1start(
     _obj: jobject,
     ptr: jlong,
 ) -> JString<'_> {
-    tracing::info!("JNI DiscordBot__1start called with ptr: {:#x}", ptr);
-    if ptr == 0 {
-        tracing::error!("Received null pointer in DiscordBot__1start");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tracing::info!("JNI DiscordBot__1start called with ptr: {:#x}", ptr);
+        if ptr == 0 {
+            tracing::error!("Received null pointer in DiscordBot__1start");
+            let value_on_throw = env
+                .new_string("<null pointer error>")
+                .expect("Couldn't create java string! Please file a GitHub issue");
+            return value_on_throw;
+        }
+
+        // SAFETY: We temporarily wrap the pointer in an Arc, call start, then restore the raw pointer
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+        tracing::info!("Arc::from_raw succeeded, calling DiscordBot::start");
+
         let value_on_throw = env
-            .new_string("<null pointer error>")
+            .new_string("<error>")
             .expect("Couldn't create java string! Please file a GitHub issue");
-        return value_on_throw;
+
+        let result = super::DiscordBot::start(Arc::clone(&discord_bot))
+            .map(|s| {
+                tracing::info!("DiscordBot::start succeeded, channel name: {}", s);
+                env.new_string(s)
+                    .expect("Couldn't create java string! Please file a GitHub issue")
+            })
+            .unwrap_or_throw(&mut env, value_on_throw);
+
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+                crate::discord_bot::discord_speak::poke_all_audio_sources();
+            });
+        tracing::info!("JNI DiscordBot__1start returning result");
+        let _ = Arc::into_raw(discord_bot);
+        result
+    }));
+    match result {
+        Ok(val) => val,
+        Err(payload) => {
+            log_jni_panic("DiscordBot__1start", ptr, &payload);
+            env.new_string("<panic>").expect("Couldn't create java string! Please file a GitHub issue")
+        }
     }
-
-    // SAFETY: We temporarily wrap the pointer in an Arc, call start, then restore the raw pointer
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
-    tracing::info!("Arc::from_raw succeeded, calling DiscordBot::start");
-
-    let value_on_throw = env
-        .new_string("<error>")
-        .expect("Couldn't create java string! Please file a GitHub issue");
-
-    let result = super::DiscordBot::start(Arc::clone(&discord_bot))
-        .map(|s| {
-            tracing::info!("DiscordBot::start succeeded, channel name: {}", s);
-            env.new_string(s)
-                .expect("Couldn't create java string! Please file a GitHub issue")
-        })
-        .unwrap_or_throw(&mut env, value_on_throw);
-
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-            crate::discord_bot::discord_speak::poke_all_audio_sources();
-        });
-    tracing::info!("JNI DiscordBot__1start returning result");
-    let _ = Arc::into_raw(discord_bot);
-    result
 }
 
 #[no_mangle]
@@ -112,9 +163,14 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1stop(
     _obj: jobject,
     ptr: jlong,
 ) {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
-    discord_bot.stop().discard_or_throw(&mut env);
-    let _ = Arc::into_raw(discord_bot);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+        discord_bot.stop().discard_or_throw(&mut env);
+        let _ = Arc::into_raw(discord_bot);
+    }));
+    if let Err(payload) = result {
+        log_jni_panic("DiscordBot__1stop", ptr, &payload);
+    }
 }
 
 #[no_mangle]
@@ -123,9 +179,14 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1free(
     _obj: jobject,
     ptr: jlong,
 ) {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
-    if let Some(uuid) = discord_bot.get_audio_source_uuid() {
-        crate::discord_bot::discord_speak::remove_audio_source(&uuid);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+        if let Some(uuid) = discord_bot.get_audio_source_uuid() {
+            crate::discord_bot::discord_speak::remove_audio_source(&uuid);
+        }
+    }));
+    if let Err(payload) = result {
+        log_jni_panic("DiscordBot__1free", ptr, &payload);
     }
 }
 
@@ -178,8 +239,8 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1createDisco
     }));
     match result {
         Ok(val) => val,
-        Err(_) => {
-            tracing::error!("Rust panic in createDiscordVoiceChannel JNI call");
+        Err(payload) => {
+            log_jni_panic("DiscordBot__1createDiscordVoiceChannel", ptr, &payload);
             0
         }
     }
@@ -192,35 +253,40 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1deleteDisco
     _obj: jobject,
     ptr: jlong,
 ) {
-    tracing::info!("JNI: Java_dev_amsam0_voicechatdiscord_DiscordBot__1deleteDiscordVoiceChannel called for ptr={:#x}", ptr);
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
-    let state = discord_bot.state.read();
-    let http = match &*state {
-        super::State::LoggedIn { http } | super::State::Started { http, .. } => http.clone(),
-        _ => {
-            tracing::error!("JNI: Bot not logged in, cannot delete channel");
-            // Only safe to call into_raw after state is dropped
-            drop(state);
-            let _ = Arc::into_raw(discord_bot);
-            return;
-        }
-    };
-    drop(state);
-    // Try to get guild_id from bot state if available
-    let guild_id = {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tracing::info!("JNI: Java_dev_amsam0_voicechatdiscord_DiscordBot__1deleteDiscordVoiceChannel called for ptr={:#x}", ptr);
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
         let state = discord_bot.state.read();
-        match &*state {
-            super::State::Started { guild_id, .. } => Some(*guild_id),
-            _ => None,
-        }
-    };
-    tracing::info!("JNI: Calling Rust delete_voice_channel with guild_id={:?}", guild_id);
-    let _ = crate::runtime::RUNTIME.block_on(async {
-        discord_bot.delete_voice_channel(&http, guild_id).await
-    });
-    tracing::info!("JNI: Rust delete_voice_channel finished with with guild_id={:?}", guild_id);
-    // Only call into_raw after all borrows are done
-    let _ = Arc::into_raw(discord_bot);
+        let http = match &*state {
+            super::State::LoggedIn { http } | super::State::Started { http, .. } => http.clone(),
+            _ => {
+                tracing::error!("JNI: Bot not logged in, cannot delete channel");
+                // Only safe to call into_raw after state is dropped
+                drop(state);
+                let _ = Arc::into_raw(discord_bot);
+                return;
+            }
+        };
+        drop(state);
+        // Try to get guild_id from bot state if available
+        let guild_id = {
+            let state = discord_bot.state.read();
+            match &*state {
+                super::State::Started { guild_id, .. } => Some(*guild_id),
+                _ => None,
+            }
+        };
+        tracing::info!("JNI: Calling Rust delete_voice_channel with guild_id={:?}", guild_id);
+        let _ = crate::runtime::RUNTIME.block_on(async {
+            discord_bot.delete_voice_channel(&http, guild_id).await
+        });
+        tracing::info!("JNI: Rust delete_voice_channel finished with with guild_id={:?}", guild_id);
+        // Only call into_raw after all borrows are done
+        let _ = Arc::into_raw(discord_bot);
+    }));
+    if let Err(payload) = result {
+        log_jni_panic("DiscordBot__1deleteDiscordVoiceChannel", ptr, &payload);
+    }
 }
 
 // JNI: Update Discord voice channel name for this bot instance
@@ -256,8 +322,8 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1updateDisco
         });
         let _ = Arc::into_raw(discord_bot);
     }));
-    if result.is_err() {
-        tracing::error!("Rust panic in updateDiscordVoiceChannelName JNI call");
+    if let Err(payload) = result {
+        log_jni_panic("DiscordBot__1updateDiscordVoiceChannelName", ptr, &payload);
     }
 }
 
@@ -286,8 +352,8 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1sendDiscord
         }
         let _ = Arc::into_raw(discord_bot);
     }));
-    if result.is_err() {
-        tracing::error!("Rust panic in sendDiscordTextMessage JNI call");
+    if let Err(payload) = result {
+        log_jni_panic("DiscordBot__1sendDiscordTextMessage", ptr, &payload);
     }
 }
 
@@ -300,38 +366,43 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1addAudioToH
     raw_opus_data: JByteArray<'local>,
     sequence_number: jlong,
 ) {
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
 
-    let player_id = match env.convert_byte_array(player_id_bytes) {
-        Ok(bytes) => match uuid::Uuid::from_slice(&bytes) {
-            Ok(uuid) => uuid,
+        let player_id = match env.convert_byte_array(player_id_bytes) {
+            Ok(bytes) => match uuid::Uuid::from_slice(&bytes) {
+                Ok(uuid) => uuid,
+                Err(e) => {
+                    tracing::error!("Invalid player_id bytes: {:?}", e);
+                    let _ = Arc::into_raw(discord_bot);
+                    return;
+                }
+            },
             Err(e) => {
-                tracing::error!("Invalid player_id bytes: {:?}", e);
+                tracing::error!("Unable to convert player_id bytes: {:?}", e);
                 let _ = Arc::into_raw(discord_bot);
                 return;
             }
-        },
-        Err(e) => {
-            tracing::error!("Unable to convert player_id bytes: {:?}", e);
-            let _ = Arc::into_raw(discord_bot);
-            return;
-        }
-    };
+        };
 
-    let raw_opus_data = match env.convert_byte_array(raw_opus_data) {
-        Ok(data) => data,
-        Err(e) => {
-            tracing::error!("Unable to convert opus byte array: {:?}", e);
-            let _ = Arc::into_raw(discord_bot);
-            return;
-        }
-    };
+        let raw_opus_data = match env.convert_byte_array(raw_opus_data) {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::error!("Unable to convert opus byte array: {:?}", e);
+                let _ = Arc::into_raw(discord_bot);
+                return;
+            }
+        };
 
-    // This is Minecraft -> Discord, so use player_to_discord_buffers
-    let seq = sequence_number as u16;
-    discord_bot.add_opus_to_playback_buffer(player_id, raw_opus_data, seq);
+        // This is Minecraft -> Discord, so use player_to_discord_buffers
+        let seq = sequence_number as u16;
+        discord_bot.add_opus_to_playback_buffer(player_id, raw_opus_data, seq);
 
-    let _ = Arc::into_raw(discord_bot);
+        let _ = Arc::into_raw(discord_bot);
+    }));
+    if let Err(payload) = result {
+        log_jni_panic("DiscordBot__1addAudioToHearingBuffer", ptr, &payload);
+    }
 }
 
 
@@ -343,42 +414,42 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
 ) -> jobject {
     use jni::objects::JObject;
 
-    if ptr == 0 {
-        tracing::error!("JNI blockForSpeakingBufferOpusData called with null pointer");
-        return std::ptr::null_mut();
-    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if ptr == 0 {
+            tracing::error!("JNI blockForSpeakingBufferOpusData called with null pointer");
+            return std::ptr::null_mut();
+        }
 
-    // Only catch panics around the Rust logic, not JNI calls
-    let rust_result = std::panic::catch_unwind(|| {
         let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
         let opus_packets = discord_bot.block_for_speaking_opus_data();
         let _ = Arc::into_raw(discord_bot);
-        opus_packets
-    });
-
-    match rust_result {
-        Ok(Ok(opus_packets)) => {
-            // Create the main array as [[[B]] (3D byte array)
-            let tuple_arr_class = env.find_class("[[B").expect("Couldn't find [[B class");
-            let arr = env.new_object_array(opus_packets.len() as i32, tuple_arr_class, JObject::null()).expect("Couldn't create main [[[B array");
-            for (i, (username, payload)) in opus_packets.iter().enumerate() {
-                let username_bytes = username.as_bytes();
-                let j_username = env.byte_array_from_slice(username_bytes).expect("Couldn't create byte array from username");
-                let j_payload = env.byte_array_from_slice(payload).expect("Couldn't create byte array from payload");
-                // Create a 2D byte array (byte[][]) for the tuple [usernameBytes, opusBytes]
-                let tuple_arr_class = env.find_class("[B").expect("Couldn't find [B class");
-                let tuple_arr = env.new_object_array(2, tuple_arr_class, JObject::null()).expect("Couldn't create tuple array");
-                env.set_object_array_element(&tuple_arr, 0, JObject::from(j_username)).expect("Couldn't set username element");
-                env.set_object_array_element(&tuple_arr, 1, JObject::from(j_payload)).expect("Couldn't set payload element");
-                env.set_object_array_element(&arr, i as i32, JObject::from(tuple_arr)).expect("Couldn't set tuple array element");
+        match opus_packets {
+            Ok(opus_packets) => {
+                // Create the main array as [[[B]] (3D byte array)
+                let tuple_arr_class = env.find_class("[[B").expect("Couldn't find [[B class");
+                let arr = env.new_object_array(opus_packets.len() as i32, tuple_arr_class, JObject::null()).expect("Couldn't create main [[[B array");
+                for (i, (username, payload)) in opus_packets.iter().enumerate() {
+                    let username_bytes = username.as_bytes();
+                    let j_username = env.byte_array_from_slice(username_bytes).expect("Couldn't create byte array from username");
+                    let j_payload = env.byte_array_from_slice(payload).expect("Couldn't create byte array from payload");
+                    // Create a 2D byte array (byte[][]) for the tuple [usernameBytes, opusBytes]
+                    let tuple_arr_class = env.find_class("[B").expect("Couldn't find [B class");
+                    let tuple_arr = env.new_object_array(2, tuple_arr_class, JObject::null()).expect("Couldn't create tuple array");
+                    env.set_object_array_element(&tuple_arr, 0, JObject::from(j_username)).expect("Couldn't set username element");
+                    env.set_object_array_element(&tuple_arr, 1, JObject::from(j_payload)).expect("Couldn't set payload element");
+                    env.set_object_array_element(&arr, i as i32, JObject::from(tuple_arr)).expect("Couldn't set tuple array element");
+                }
+                arr.into_raw()
+            },
+            Err(_) => {
+                std::ptr::null_mut()
             }
-            arr.into_raw()
-        },
-        Ok(Err(_)) => {
-            std::ptr::null_mut()
-        },
-        Err(_) => {
-            tracing::error!("Panic in blockForSpeakingBufferOpusData for ptr: {:#x}", ptr);
+        }
+    }));
+    match result {
+        Ok(val) => val,
+        Err(payload) => {
+            log_jni_panic("DiscordBot__1blockForSpeakingBufferOpusData", ptr, &payload);
             std::ptr::null_mut()
         }
     }
@@ -413,22 +484,27 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1disconnect(
     _obj: jobject,
     ptr: jlong,
 ) {
-    tracing::info!("JNI: Java_dev_amsam0_voicechatdiscord_DiscordBot__1disconnect called for ptr={:#x}", ptr);
-    let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
-    // Try to get guild_id from bot state if available
-    let guild_id = {
-        let state = discord_bot.state.read();
-        match &*state {
-            super::State::Started { guild_id, .. } => Some(*guild_id),
-            _ => None,
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tracing::info!("JNI: Java_dev_amsam0_voicechatdiscord_DiscordBot__1disconnect called for ptr={:#x}", ptr);
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
+        // Try to get guild_id from bot state if available
+        let guild_id = {
+            let state = discord_bot.state.read();
+            match &*state {
+                super::State::Started { guild_id, .. } => Some(*guild_id),
+                _ => None,
+            }
+        };
+        if let Some(guild_id) = guild_id {
+            let _ = crate::runtime::RUNTIME.block_on(async {
+                discord_bot.disconnect(guild_id).await
+            });
+        } else {
+            tracing::warn!("JNI: Bot is not in a started state, cannot disconnect from voice channel");
         }
-    };
-    if let Some(guild_id) = guild_id {
-        let _ = crate::runtime::RUNTIME.block_on(async {
-            discord_bot.disconnect(guild_id).await
-        });
-    } else {
-        tracing::warn!("JNI: Bot is not in a started state, cannot disconnect from voice channel");
+        let _ = Arc::into_raw(discord_bot);
+    }));
+    if let Err(payload) = result {
+        log_jni_panic("DiscordBot__1disconnect", ptr, &payload);
     }
-    let _ = Arc::into_raw(discord_bot);
 }

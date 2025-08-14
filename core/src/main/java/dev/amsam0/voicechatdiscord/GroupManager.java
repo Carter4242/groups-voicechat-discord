@@ -50,7 +50,7 @@ public final class GroupManager {
         return players;
     }
 
-    private static void handlePlayerJoin(Group group, ServerPlayer player, VoicechatConnection connection, DiscordBot bot) {
+    private static void handlePlayerJoin(Group group, ServerPlayer player, VoicechatConnection connection, DiscordBot bot, int playerCount) {
         platform.info("[handlePlayerJoin] Handling join for player " + player.getUuid() + " in group " + group.getId());
         
         // Create a StaticAudioChannel for every Discord user currently in the VC for this group
@@ -78,7 +78,7 @@ public final class GroupManager {
                 }
             }
 
-            String joinMsg = ">> **" + platform.getName(player) + "** joined the group!";
+            String joinMsg = ">> **" + platform.getName(player) + "** joined the group! (" + playerCount + (playerCount == 1 ? " Player" : " Players") + ")";
             bot.sendDiscordTextMessageAsync(joinMsg);
         }
     }
@@ -112,13 +112,13 @@ public final class GroupManager {
         if (!wasPresent) {
             platform.info(player.getUuid() + " (" + platform.getName(player) + ") joined " + group.getId() + " (" + group.getName() + ")");
             players.add(player);
-            handlePlayerJoin(group, player, event.getConnection(), bot);
+            handlePlayerJoin(group, player, event.getConnection(), bot, players.size());
         } else {
             platform.info(player.getUuid() + " (" + platform.getName(player) + ") already joined " + group.getId() + " (" + group.getName() + ")");
         }
 
         if (bot != null) {
-            bot.updateDiscordVoiceChannelNameAsync(players.size(), group.getName());
+            //updateDiscordVoiceChannelNameAsync(players.size(), group.getName());
 
             // Send a list of all users currently in the Discord VC for this group
             Long discordChannelId = bot.getDiscordChannelId();
@@ -170,8 +170,8 @@ public final class GroupManager {
         if (!players.isEmpty()) {
             DiscordBot bot = groupBotMap.get(group.getId());
             if (bot != null) {
-                bot.updateDiscordVoiceChannelNameAsync(players.size(), group.getName());
-                String leaveMsg = ">> **" + platform.getName(player) + "** left the group.";
+                //bot.updateDiscordVoiceChannelNameAsync(players.size(), group.getName());
+                String leaveMsg = ">> **" + platform.getName(player) + "** left the group. (" + players.size() + (players.size() == 1 ? " Player" : " Players") + ")";
                 bot.sendDiscordTextMessageAsync(leaveMsg);
             }
         }
@@ -249,7 +249,7 @@ public final class GroupManager {
 
                         List<ServerPlayer> players = getPlayers(group);
                         players.add(player);
-                        handlePlayerJoin(group, player, connection, bot);
+                        handlePlayerJoin(group, player, connection, bot, players.size());
 
                         // Process any queued join events for this group
                         List<JoinGroupEvent> queued;
