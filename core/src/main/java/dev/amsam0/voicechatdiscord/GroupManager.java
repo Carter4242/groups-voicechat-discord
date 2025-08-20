@@ -44,6 +44,30 @@ public final class GroupManager {
     // Track groups removed before channel creation completes
     public static final Set<UUID> removedBeforeCreation = new HashSet<>();
 
+    // Timer for periodic VC name updates
+    private static final java.util.Timer vcUpdateTimer = new java.util.Timer(true);
+    private static final long VC_UPDATE_INTERVAL_MS = 310_000; // 5m 10s
+
+    static {
+        // Start periodic VC name updates for all Discord groups
+        vcUpdateTimer.scheduleAtFixedRate(new java.util.TimerTask() {
+            @Override
+            public void run() {
+                for (UUID groupId : groupBotMap.keySet()) {
+                    DiscordBot bot = groupBotMap.get(groupId);
+                    if (bot != null) {
+                        List<ServerPlayer> players = groupPlayerMap.get(groupId);
+                        int playerCount = (players != null) ? players.size() : 0;
+                        if (playerCount > 0) {
+                            String groupName = Core.api.getGroup(groupId).getName();
+                            bot.updateDiscordVoiceChannelNameAsync(playerCount, groupName);
+                        }
+                    }
+                }
+            }
+        }, 0, VC_UPDATE_INTERVAL_MS);
+    }
+
     private static List<ServerPlayer> getPlayers(Group group) {
         List<ServerPlayer> players = groupPlayerMap.putIfAbsent(group.getId(), new ArrayList<>());
         if (players == null) players = groupPlayerMap.get(group.getId()); // java is bad
@@ -118,8 +142,6 @@ public final class GroupManager {
         }
 
         if (bot != null) {
-            //updateDiscordVoiceChannelNameAsync(players.size(), group.getName());
-
             // Send a list of all users currently in the Discord VC for this group
             Long discordChannelId = bot.getDiscordChannelId();
             if (discordChannelId != null) {
@@ -170,7 +192,6 @@ public final class GroupManager {
         if (!players.isEmpty()) {
             DiscordBot bot = groupBotMap.get(group.getId());
             if (bot != null) {
-                //bot.updateDiscordVoiceChannelNameAsync(players.size(), group.getName());
                 String leaveMsg = ">> **" + platform.getName(player) + "** left the group. (" + players.size() + (players.size() == 1 ? " Player" : " Players") + ")";
                 bot.sendDiscordTextMessageAsync(leaveMsg);
             }
