@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Write},
+    io::{self},
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -38,6 +38,7 @@ pub fn create_playable_input(
         shutdown,
         should_send_silence: should_send_silence.clone(),
         silent_countdown: 0,
+        leftover: Vec::new(),
         _id: audio_source_id,
     };
     // Register this audio source globally
@@ -63,6 +64,7 @@ struct PlayerAudioSource {
     shutdown: Arc<AtomicBool>,
     should_send_silence: Arc<AtomicBool>,
     silent_countdown: u8,
+    leftover: Vec<u8>,
     _id: Uuid,
 }
 
@@ -83,9 +85,27 @@ pub fn poke_all_audio_sources() {
 
 
 impl io::Read for PlayerAudioSource {
-    fn read(&mut self, mut buf: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        tracing::info!(
+            "PlayerAudioSource::read: shutdown={}, buf_size={}, leftover_len={}",
+            self.shutdown.load(Ordering::SeqCst), buf.len(), self.leftover.len()
+        );
         if self.shutdown.load(Ordering::SeqCst) {
+            tracing::info!("PlayerAudioSource::read: returning early due to shutdown, bytes=0");
             return Ok(0);
+        }
+
+        // Serve leftover bytes first
+        if !self.leftover.is_empty() {
+            let to_copy = std::cmp::min(buf.len(), self.leftover.len());
+            buf[..to_copy].copy_from_slice(&self.leftover[..to_copy]);
+            if to_copy < self.leftover.len() {
+                self.leftover = self.leftover[to_copy..].to_vec();
+            } else {
+                self.leftover.clear();
+            }
+            tracing::info!("PlayerAudioSource::read: returning leftover bytes, bytes={}", to_copy);
+            return Ok(to_copy);
         }
 
         let now = std::time::Instant::now();
@@ -100,7 +120,7 @@ impl io::Read for PlayerAudioSource {
             if self.shutdown.load(Ordering::SeqCst) {
                 return Ok(0);
             }
-            std::thread::sleep(sleep_time);
+            //std::thread::sleep(sleep_time);
         }
         let now = std::time::Instant::now();
         let elapsed = now.duration_since(next_time);
@@ -124,6 +144,7 @@ impl io::Read for PlayerAudioSource {
 
         loop {
             if self.shutdown.load(Ordering::SeqCst) {
+                tracing::info!("PlayerAudioSource::read: returning early due to shutdown in loop, bytes=0");
                 return Ok(0);
             }
             if self.prev_zero {
@@ -131,7 +152,7 @@ impl io::Read for PlayerAudioSource {
                 self.prev_zero = false;
                 self.next_frame_time = Some(std::time::Instant::now() + FRAME_DURATION);
             }
-            let mut written = 0;
+            let mut temp = Vec::new();
             let mut _frames_returned = 0;
             let mut _frames_skipped = 0;
             for _ in 0..frames {
@@ -213,10 +234,10 @@ impl io::Read for PlayerAudioSource {
 
                 for sample in combined.iter() {
                     let converted = (*sample as f32) / (i16::MAX as f32);
-                    written += buf.write(&converted.to_le_bytes())?;
+                    temp.extend_from_slice(&converted.to_le_bytes());
                 }
             }
-            if written == 0 {
+            if temp.is_empty() {
                 // If we just failed to send frames, only return 1 frame next time
                 // If we've been poked, set the silent_countdown to 3
                 if self.should_send_silence.swap(false, Ordering::SeqCst) {
@@ -225,22 +246,33 @@ impl io::Read for PlayerAudioSource {
                 // If countdown is active, send a silent frame and decrement
                 if self.silent_countdown > 0 {
                     let silent_frame = [0f32; 960];
-                    let mut bytes_written = 0;
                     for sample in silent_frame.iter() {
-                        bytes_written += buf.write(&sample.to_le_bytes())?;
+                        temp.extend_from_slice(&sample.to_le_bytes());
                     }
                     self.silent_countdown -= 1;
-                    return Ok(bytes_written);
+                    let to_copy = std::cmp::min(buf.len(), temp.len());
+                    buf[..to_copy].copy_from_slice(&temp[..to_copy]);
+                    tracing::info!("PlayerAudioSource::read: returning silent frame, bytes={}", to_copy);
+                    return Ok(to_copy);
                 }
                 self.prev_zero = true;
                 std::thread::sleep(std::time::Duration::from_millis(2));
+                tracing::info!("PlayerAudioSource::read: restarting after failed frame, bytes=0");
                 continue;
             }
             // Log actual time since last frame sent
             let now = std::time::Instant::now();
             self.last_frame_sent = Some(now);
             self.prev_zero = false;
-            return Ok(written);
+            let to_copy: usize = std::cmp::min(buf.len(), temp.len());
+            buf[..to_copy].copy_from_slice(&temp[..to_copy]);
+            if to_copy < temp.len() {
+                self.leftover = temp[to_copy..].to_vec();
+            } else {
+                self.leftover.clear();
+            }
+            tracing::info!("PlayerAudioSource::read: returning with audio, bytes={}", to_copy);
+            return Ok(to_copy);
         }
     }
 }
