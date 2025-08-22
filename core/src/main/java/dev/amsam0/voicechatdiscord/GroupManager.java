@@ -336,8 +336,7 @@ public final class GroupManager {
         // Remove all StaticAudioChannels for this player if present
         Map<UUID, Map<String, StaticAudioChannel>> channels = groupAudioChannels.get(groupId);
         if (channels != null) {
-            var removed = channels.remove(playerUuid);
-            if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + playerUuid + " in group " + groupId);
+            channels.remove(playerUuid);
         }
 
         if (players != null && !players.isEmpty()) {
@@ -352,8 +351,7 @@ public final class GroupManager {
     public static void handleMinecraftPlayerLeave(UUID playerUuid) {
         for (Map.Entry<UUID, List<ServerPlayer>> entry : groupPlayerMap.entrySet()) {
             UUID groupId = entry.getKey();
-            String playerName = playerUuid.toString();
-            // Try to get the name from the first matching ServerPlayer
+            String playerName = null;
             List<ServerPlayer> players = entry.getValue();
             for (ServerPlayer p : players) {
                 if (p.getUuid().equals(playerUuid)) {
@@ -361,7 +359,10 @@ public final class GroupManager {
                     break;
                 }
             }
-            removePlayerFromGroup(groupId, playerUuid, playerName);
+            if (playerName != null) {
+                removePlayerFromGroup(groupId, playerUuid, playerName);
+                break;
+            }
         }
     }
 }
