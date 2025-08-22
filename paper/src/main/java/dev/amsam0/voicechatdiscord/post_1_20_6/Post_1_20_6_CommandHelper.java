@@ -16,7 +16,8 @@ public class Post_1_20_6_CommandHelper implements CommandHelper {
         var manager = PaperPlugin.get().getLifecycleManager();
         manager.registerEventHandler(LifecycleEvents.COMMANDS, event -> {
             final Commands commands = event.registrar();
-            commands.register(SubCommands.build(Commands.literal("dvc")).build());
+            commands.register(SubCommands.build(Commands.literal("dvcgroup")).build());
+            commands.register(SubCommands.buildMsg(Commands.literal("dvcgroupmsg")).build());
         });
     }
 

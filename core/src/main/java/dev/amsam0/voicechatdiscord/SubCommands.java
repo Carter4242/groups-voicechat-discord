@@ -2,6 +2,8 @@ package dev.amsam0.voicechatdiscord;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import de.maxhenkel.voicechat.api.ServerPlayer;
 import java.util.UUID;
@@ -11,15 +13,82 @@ import static dev.amsam0.voicechatdiscord.Constants.RELOAD_CONFIG_PERMISSION;
 import static dev.amsam0.voicechatdiscord.Core.*;
 
 /**
- * Subcommands for /dvc
+ * Subcommands for /dvcgroup
  */
 public final class SubCommands {
     @SuppressWarnings("unchecked")
     public static <S> LiteralArgumentBuilder<S> build(LiteralArgumentBuilder<S> builder) {
-    return (LiteralArgumentBuilder<S>) ((LiteralArgumentBuilder<Object>) builder)
-        .then(literal("reloadconfig").executes(wrapInTry(SubCommands::reloadConfig)))
-        .then(literal("restartbot").executes(wrapInTry(SubCommands::restartBot)))
-        .then(literal("stopbot").executes(wrapInTry(SubCommands::stopBot)));
+        return (LiteralArgumentBuilder<S>) ((LiteralArgumentBuilder<Object>) builder)
+            .then(literal("reloadconfig").executes(wrapInTry(SubCommands::reloadConfig)))
+            .then(literal("restart").executes(wrapInTry(SubCommands::restartBot)))
+            .then(literal("stop").executes(wrapInTry(SubCommands::stopBot)))
+            .then(literal("message")
+                .then(RequiredArgumentBuilder.argument("message", StringArgumentType.greedyString())
+                    .executes(wrapInTry(SubCommands::sendMessageToDiscord))
+                )
+            );
+    }
+
+    /**
+     * Standalone builder for /dvcgroupmsg <message>
+     */
+    public static <S> LiteralArgumentBuilder<S> buildMsg(LiteralArgumentBuilder<S> builder) {
+        return builder
+            .then(com.mojang.brigadier.builder.RequiredArgumentBuilder.<S, String>argument("message", StringArgumentType.greedyString())
+                .executes(wrapInTry(SubCommands::sendMessageToDiscord))
+            );
+    }
+
+    /**
+     * Sends a message to the Discord channel for the group the sender is in.
+     */
+    private static void sendMessageToDiscord(CommandContext<?> sender) {
+        ServerPlayer player = platform.commandContextToPlayer(sender);
+        if (player == null) {
+            platform.sendMessage(sender, Component.red("Could not determine your player. Are you running this from console?"));
+            return;
+        }
+
+        // Find the groupId the player is in
+        UUID groupId = null;
+        for (var entry : GroupManager.groupPlayerMap.entrySet()) {
+            for (var p : entry.getValue()) {
+                if (p.getUuid().equals(player.getUuid())) {
+                    groupId = entry.getKey();
+                    break;
+                }
+            }
+            if (groupId != null) break;
+        }
+        if (groupId == null) {
+            platform.sendMessage(sender, Component.red("You are not in a voicechat group."));
+            return;
+        }
+
+        DiscordBot bot = GroupManager.groupBotMap.get(groupId);
+        if (bot == null) {
+            platform.sendMessage(sender, Component.red("No Discord bot is assigned to your group."));
+            return;
+        }
+
+        String text = StringArgumentType.getString(sender, "message");
+        if (text == null || text.isEmpty()) {
+            platform.sendMessage(sender, Component.red("Message cannot be empty."));
+            return;
+        }
+
+        String discordMessage = "**" + platform.getName(player) + ":** " + text;
+        bot.sendDiscordTextMessageAsync(discordMessage);
+        // Broadcast to all group members in Minecraft with [Group] prefix in green and sender's name
+        var groupPlayers = GroupManager.groupPlayerMap.get(groupId);
+        if (groupPlayers != null && !groupPlayers.isEmpty()) {
+            Component prefix = Component.green("[Group] ");
+            Component name = Component.gray(platform.getName(player));
+            Component msg = Component.white(": " + text);
+            for (ServerPlayer p : groupPlayers) {
+                platform.sendMessage(p, prefix, name, msg);
+            }
+        }
     }
 
     /**

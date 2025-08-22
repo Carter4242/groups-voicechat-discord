@@ -164,6 +164,7 @@ public final class GroupManager {
                         if (i > 0) components.add(Component.white(", "));
                         components.add(Component.gold(discordUsers.get(i)));
                     }
+                        components.add(Component.blue("\n[Discord] ").append(Component.white("Use ")).append(Component.gold("/dvcgroupmsg")).append(Component.white(" to chat with the group.")));
                     platform.sendMessage(player, components.toArray(new Component[0]));
                 }
             }
