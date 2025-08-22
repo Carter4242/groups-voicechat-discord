@@ -70,7 +70,7 @@ public final class GroupManager {
 
     private static List<ServerPlayer> getPlayers(Group group) {
         List<ServerPlayer> players = groupPlayerMap.putIfAbsent(group.getId(), new ArrayList<>());
-        if (players == null) players = groupPlayerMap.get(group.getId()); // java is bad
+        if (players == null) players = groupPlayerMap.get(group.getId());
         return players;
     }
 
@@ -179,23 +179,7 @@ public final class GroupManager {
             return;
         }
 
-        List<ServerPlayer> players = getPlayers(group);
-        players.removeIf(p -> p.getUuid().equals(player.getUuid()));
-
-        // Remove all StaticAudioChannels for this player if present
-        Map<UUID, Map<String, StaticAudioChannel>> channels = groupAudioChannels.get(group.getId());
-        if (channels != null) {
-            var removed = channels.remove(player.getUuid());
-            if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + player.getUuid() + " in group " + group.getId());
-        }
-
-        if (!players.isEmpty()) {
-            DiscordBot bot = groupBotMap.get(group.getId());
-            if (bot != null) {
-                String leaveMsg = ">> **" + platform.getName(player) + "** left the group. (" + players.size() + (players.size() == 1 ? " Player" : " Players") + ")";
-                bot.sendDiscordTextMessageAsync(leaveMsg);
-            }
-        }
+        removePlayerFromGroup(group.getId(), player.getUuid(), platform.getName(player));
     }
 
     @SuppressWarnings("DataFlowIssue")
@@ -341,5 +325,43 @@ public final class GroupManager {
         groupAudioChannels.remove(groupId);
         groupPlayerMap.remove(groupId);
         groupOwnerMap.remove(groupId);
+    }
+
+    private static void removePlayerFromGroup(UUID groupId, UUID playerUuid, String playerName) {
+        List<ServerPlayer> players = groupPlayerMap.get(groupId);
+        if (players != null) {
+            players.removeIf(p -> p.getUuid().equals(playerUuid));
+        }
+
+        // Remove all StaticAudioChannels for this player if present
+        Map<UUID, Map<String, StaticAudioChannel>> channels = groupAudioChannels.get(groupId);
+        if (channels != null) {
+            var removed = channels.remove(playerUuid);
+            if (removed != null && !removed.isEmpty()) platform.info("Removed StaticAudioChannels for player " + playerUuid + " in group " + groupId);
+        }
+
+        if (players != null && !players.isEmpty()) {
+            DiscordBot bot = groupBotMap.get(groupId);
+            if (bot != null) {
+                String leaveMsg = ">> **" + playerName + "** left the group. (" + players.size() + (players.size() == 1 ? " Player" : " Players") + ")";
+                bot.sendDiscordTextMessageAsync(leaveMsg);
+            }
+        }
+    }
+
+    public static void handleMinecraftPlayerLeave(UUID playerUuid) {
+        for (Map.Entry<UUID, List<ServerPlayer>> entry : groupPlayerMap.entrySet()) {
+            UUID groupId = entry.getKey();
+            String playerName = playerUuid.toString();
+            // Try to get the name from the first matching ServerPlayer
+            List<ServerPlayer> players = entry.getValue();
+            for (ServerPlayer p : players) {
+                if (p.getUuid().equals(playerUuid)) {
+                    playerName = platform.getName(p);
+                    break;
+                }
+            }
+            removePlayerFromGroup(groupId, playerUuid, playerName);
+        }
     }
 }

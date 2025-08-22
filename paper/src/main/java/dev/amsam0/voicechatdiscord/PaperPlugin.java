@@ -4,12 +4,17 @@ import de.maxhenkel.voicechat.api.BukkitVoicechatService;
 import dev.amsam0.voicechatdiscord.post_1_20_6.Post_1_20_6_CommandHelper;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
+
+import java.util.UUID;
 
 import static dev.amsam0.voicechatdiscord.Constants.PLUGIN_ID;
 import static dev.amsam0.voicechatdiscord.Core.*;
 
-public final class PaperPlugin extends JavaPlugin {
+public final class PaperPlugin extends JavaPlugin implements Listener {
     public static final Logger LOGGER = LogManager.getLogger(PLUGIN_ID);
     public static PaperPlugin INSTANCE;
     public static CommandHelper commandHelper;
@@ -43,6 +48,8 @@ public final class PaperPlugin extends JavaPlugin {
         enable();
 
         commandHelper.registerCommands();
+
+        getServer().getPluginManager().registerEvents(this, this);
     }
 
     @Override
@@ -53,5 +60,11 @@ public final class PaperPlugin extends JavaPlugin {
             getServer().getServicesManager().unregister(voicechatPlugin);
             LOGGER.info("Successfully unregistered voicechat discord plugin");
         }
+    }
+
+    @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        UUID playerUuid = event.getPlayer().getUniqueId();
+        dev.amsam0.voicechatdiscord.GroupManager.handleMinecraftPlayerLeave(playerUuid);
     }
 }

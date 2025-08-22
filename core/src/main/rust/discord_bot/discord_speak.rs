@@ -120,7 +120,7 @@ impl io::Read for PlayerAudioSource {
             if self.shutdown.load(Ordering::SeqCst) {
                 return Ok(0);
             }
-            //std::thread::sleep(sleep_time);
+            std::thread::sleep(sleep_time);
         }
         let now = std::time::Instant::now();
         let elapsed = now.duration_since(next_time);
