@@ -44,6 +44,8 @@ public final class GroupManager {
     // Track groups removed before channel creation completes
     public static final Set<UUID> removedBeforeCreation = new HashSet<>();
 
+    // Track last player count for each group to avoid unnecessary renames
+    private static final Map<UUID, Integer> lastPlayerCounts = new HashMap<>();
     // Timer for periodic VC name updates
     private static final java.util.Timer vcUpdateTimer = new java.util.Timer(true);
     private static final long VC_UPDATE_INTERVAL_MS = 310_000; // 5m 10s
@@ -58,9 +60,11 @@ public final class GroupManager {
                     if (bot != null) {
                         List<ServerPlayer> players = groupPlayerMap.get(groupId);
                         int playerCount = (players != null) ? players.size() : 0;
-                        if (playerCount > 0) {
+                        Integer lastCount = lastPlayerCounts.get(groupId);
+                        if (playerCount > 0 && (lastCount == null || lastCount != playerCount)) {
                             String groupName = Core.api.getGroup(groupId).getName();
                             bot.updateDiscordVoiceChannelNameAsync(playerCount, groupName);
+                            lastPlayerCounts.put(groupId, playerCount);
                         }
                     }
                 }
