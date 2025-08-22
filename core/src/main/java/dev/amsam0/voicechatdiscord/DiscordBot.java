@@ -141,7 +141,7 @@ public final class DiscordBot {
             return;
         }
         String playerWord = (playerCount == 1) ? "Player" : "Players";
-        String newName = "[~" + playerCount + " " + playerWord + "] " + groupName;
+        String newName = "[" + playerCount + " " + playerWord + "] " + groupName;
         new Thread(() -> {
             try {
                 _updateDiscordVoiceChannelName(ptr, newName);
