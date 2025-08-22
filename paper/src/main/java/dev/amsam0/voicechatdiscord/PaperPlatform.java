@@ -54,31 +54,47 @@ public class PaperPlatform implements Platform {
     }
 
     private net.kyori.adventure.text.Component toNative(Component... message) {
-        net.kyori.adventure.text.Component nativeComponent = null;
+        java.util.List<net.kyori.adventure.text.Component> components = new java.util.ArrayList<>();
 
-        for (var component : message) {
-            net.kyori.adventure.text.Component mapped = net.kyori.adventure.text.Component.text(
-                    component.text(),
-                    switch (component.color()) {
-                        case WHITE -> NamedTextColor.WHITE;
-                        case RED -> NamedTextColor.RED;
-                        case YELLOW -> NamedTextColor.YELLOW;
-                        case GREEN -> NamedTextColor.GREEN;
-                        case GOLD -> NamedTextColor.GOLD;
-                        case BLUE -> NamedTextColor.BLUE;
-                    }
-            );
-            if (nativeComponent == null) {
-                nativeComponent = mapped;
-            } else {
-                nativeComponent = nativeComponent.append(mapped);
+        for (dev.amsam0.voicechatdiscord.Component root : message) {
+            dev.amsam0.voicechatdiscord.Component current = root;
+            while (current != null) {
+                net.kyori.adventure.text.Component mapped = net.kyori.adventure.text.Component.text(
+                        current.text(),
+                        switch (current.color()) {
+                            case WHITE -> NamedTextColor.WHITE;
+                            case RED -> NamedTextColor.RED;
+                            case YELLOW -> NamedTextColor.YELLOW;
+                            case GREEN -> NamedTextColor.GREEN;
+                            case GOLD -> NamedTextColor.GOLD;
+                            case BLUE -> NamedTextColor.BLUE;
+                            case GRAY -> NamedTextColor.GRAY;
+                            case AQUA -> NamedTextColor.AQUA;
+                            default -> NamedTextColor.WHITE;
+                        }
+                );
+                if (current.clickUrl() != null && !current.clickUrl().isEmpty()) {
+                    mapped = mapped.clickEvent(net.kyori.adventure.text.event.ClickEvent.openUrl(current.clickUrl()));
+                }
+                if (current.hoverText() != null && !current.hoverText().isEmpty()) {
+                    mapped = mapped.hoverEvent(net.kyori.adventure.text.event.HoverEvent.showText(
+                        net.kyori.adventure.text.Component.text(current.hoverText())
+                    ));
+                }
+                components.add(mapped);
+                current = current.next();
             }
         }
 
-        if (nativeComponent == null) {
+        if (components.isEmpty()) {
             return net.kyori.adventure.text.Component.empty();
         }
-        return nativeComponent;
+        // Join all components into one flat component
+        net.kyori.adventure.text.Component result = net.kyori.adventure.text.Component.empty();
+        for (net.kyori.adventure.text.Component c : components) {
+            result = result.append(c);
+        }
+        return result;
     }
 
     @Override
