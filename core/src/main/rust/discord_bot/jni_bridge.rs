@@ -478,6 +478,47 @@ pub fn notify_java_discord_user_voice_state(
     ).expect("Failed to call onDiscordUserVoiceState on Java side");
 }
 
+/// Notify Java when a Discord text message is sent in a managed VC channel.
+pub fn notify_java_discord_text_message(
+    env: &mut jni::JNIEnv,
+    java_bot_obj: &jni::objects::JObject,
+    author: &str,
+    author_id: u64,
+    message: &str,
+    channel_id: u64,
+    attachments: &Vec<(String, String)>,
+) {
+    let author_jstring = env.new_string(author).expect("Failed to create Java string for author");
+    let message_jstring = env.new_string(message).expect("Failed to create Java string for message");
+    use jni::objects::JObject;
+
+    // Build Java String[][] for attachments
+    let string_class = env.find_class("java/lang/String").expect("Couldn't find String class");
+    let array_class = env.find_class("[Ljava/lang/String;").expect("Couldn't find [Ljava/lang/String; class");
+    let attachments_array = env.new_object_array(attachments.len() as i32, array_class, JObject::null()).expect("Couldn't create attachments array");
+    for (i, (filename, url)) in attachments.iter().enumerate() {
+        let filename_jstring = env.new_string(filename).expect("Failed to create Java string for filename");
+        let url_jstring = env.new_string(url).expect("Failed to create Java string for url");
+        let tuple_array = env.new_object_array(2, &string_class, JObject::null()).expect("Couldn't create tuple array");
+        env.set_object_array_element(&tuple_array, 0, JObject::from(filename_jstring)).expect("Couldn't set filename element");
+        env.set_object_array_element(&tuple_array, 1, JObject::from(url_jstring)).expect("Couldn't set url element");
+        env.set_object_array_element(&attachments_array, i as i32, JObject::from(tuple_array)).expect("Couldn't set tuple array element");
+    }
+
+    env.call_method(
+        java_bot_obj,
+        "onDiscordTextMessage",
+        "(Ljava/lang/String;JLjava/lang/String;J[[Ljava/lang/String;)V",
+        &[
+            jni::objects::JValue::Object(&JObject::from(author_jstring)),
+            jni::objects::JValue::Long(author_id as i64),
+            jni::objects::JValue::Object(&JObject::from(message_jstring)),
+            jni::objects::JValue::Long(channel_id as i64),
+            jni::objects::JValue::Object(&JObject::from(attachments_array)),
+        ],
+    ).expect("Failed to call onDiscordTextMessage on Java side");
+}
+
 #[no_mangle]
 pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1disconnect(
     mut _env: JNIEnv<'_>,

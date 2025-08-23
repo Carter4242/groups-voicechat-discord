@@ -745,4 +745,70 @@ public final class DiscordBot {
             platform.sendMessage(player, prefix, name, action);
         }
     }
+
+    /**
+     * Called from Rust when a Discord text message is sent in the managed VC channel.
+     * Broadcasts the message to all group members in Simple Voice Chat.
+     * @param author The Discord username
+     * @param message The message content
+     * @param channelId The Discord channel ID
+     * @param attachmentsArr String[][] from JNI, where each element is [filename, url]
+     */
+    public void onDiscordTextMessage(String author, long authorId, String message, long channelId, String[][] attachmentsArr) {
+        // Only process if this bot's channel matches
+        if (freed || ptr == 0) return;
+        if (discordChannelId == null || discordChannelId != channelId) return;
+
+        // Ignore messages from any bot user ID
+        if (Core.botUserIds != null && Core.botUserIds.contains(authorId)) return;
+
+        // Format message for Minecraft group chat with colored [Discord] prefix
+        Component prefix = Component.blue("[Discord] ");
+        Component name = Component.gold(author);
+        Component msg = Component.white(": " + message);
+        
+        Component attachmentsChain = null;
+        if (attachmentsArr != null && attachmentsArr.length > 0) {
+            for (int i = 0; i < attachmentsArr.length; i++) {
+                String[] tuple = attachmentsArr[i];
+                if (tuple != null && tuple.length == 2) {
+                    String filename = tuple[0];
+                    String url = tuple[1];
+                    String label = "[" + filename + "]";
+                    Component link = Component.aqua(label)
+                        .withClickUrl(url)
+                        .withHoverText(url);
+                    if (attachmentsChain == null) {
+                        attachmentsChain = link;
+                    } else {
+                        Component separator = Component.white(" ");
+                        attachmentsChain = attachmentsChain.append(separator).append(link);
+                    }
+                } else {
+                    platform.warn("[DiscordBot] Skipping invalid attachment tuple at index " + i + ": " + java.util.Arrays.toString(tuple));
+                }
+            }
+            if (attachmentsChain != null) {
+                Component space = Component.white(" ");
+                msg = msg.append(space).append(attachmentsChain);
+            }
+        }
+
+        java.util.UUID groupId = null;
+        // Find groupId for this bot
+        for (var entry : GroupManager.groupBotMap.entrySet()) {
+            if (entry.getValue() == this) {
+                groupId = entry.getKey();
+                break;
+            }
+        }
+        if (groupId == null) return;
+
+        var players = GroupManager.groupPlayerMap.get(groupId);
+        if (players == null || players.isEmpty()) return;
+
+        for (var player : players) {
+            platform.sendMessage(player, prefix, name, msg);
+        }
+    }
 }

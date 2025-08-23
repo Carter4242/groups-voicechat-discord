@@ -54,7 +54,9 @@ impl super::DiscordBot {
         *client_task = Some(
             RUNTIME
                 .spawn(async move {
-                    let intents = GatewayIntents::GUILD_VOICE_STATES;
+                    let intents = GatewayIntents::GUILD_VOICE_STATES
+                        | GatewayIntents::GUILD_MESSAGES
+                        | GatewayIntents::MESSAGE_CONTENT;
 
                     let mut client = match Client::builder(&token, intents)
                         .event_handler(Handler {
@@ -157,6 +159,38 @@ impl EventHandler for Handler {
             }
         } else {
             tracing::warn!("[voice_state_update] DiscordBot instance no longer exists");
+        }
+    }
+
+    async fn message(&self, _ctx: Context, msg: serenity::all::Message) {
+        if let Some(bot) = self.bot.upgrade() {
+            // Get the managed channel_id (voice channel) for this bot
+            let channel_id_opt = *bot.channel_id.lock();
+            if let Some(managed_channel_id) = channel_id_opt {
+                // Only forward messages sent in the managed channel
+                if msg.channel_id == managed_channel_id {
+                    let author = msg.author.name.clone();
+                    let author_id = msg.author.id.get() as u64;
+                    let content = msg.content.clone();
+
+                    // Collect attachments as Vec<(String, String)>: (filename, url)
+                    let attachments: Vec<(String, String)> = msg.attachments.iter()
+                        .map(|a| (a.filename.clone(), a.url.clone()))
+                        .collect();
+
+                    // Attach to JVM and call Java handler
+                    let mut env = bot.java_vm.attach_current_thread().expect("Failed to attach thread to JVM");
+                    crate::discord_bot::jni_bridge::notify_java_discord_text_message(
+                        &mut env,
+                        bot.java_bot_obj.as_obj(),
+                        &author,
+                        author_id,
+                        &content,
+                        managed_channel_id.get() as u64,
+                        &attachments,
+                    );
+                }
+            }
         }
     }
 }
