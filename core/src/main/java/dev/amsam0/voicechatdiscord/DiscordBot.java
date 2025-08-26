@@ -27,6 +27,10 @@ public final class DiscordBot {
     // Store the Discord voice channel ID for this group
     private volatile Long discordChannelId = null;
 
+    // Formats Discord emotes in a message to :name: for Minecraft display.
+    private static final java.util.regex.Pattern EMOTE_PATTERN = java.util.regex.Pattern.compile("<a?:([A-Za-z0-9_]+):[0-9]+>");
+
+
     public Long getDiscordChannelId() {
         return discordChannelId;
     }
@@ -745,6 +749,22 @@ public final class DiscordBot {
             platform.sendMessage(player, prefix, name, action);
         }
     }
+    
+    /**
+     * Formats Discord emotes in a message to :name: for Minecraft display.
+     * E.g. <a:Nod:123456789> or <:handrub:123456789> becomes :Nod: or :handrub:
+     */
+    public static String formatEmotes(String message) {
+        if (message == null || message.indexOf(':') == -1) return message;
+        
+        java.util.regex.Matcher matcher = EMOTE_PATTERN.matcher(message);
+        StringBuffer sb = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(sb, ":" + matcher.group(1) + ":");
+        }
+        matcher.appendTail(sb);
+        return sb.toString();
+    }
 
     /**
      * Called from Rust when a Discord text message is sent in the managed VC channel.
@@ -762,10 +782,12 @@ public final class DiscordBot {
         // Ignore messages from any bot user ID
         if (Core.botUserIds != null && Core.botUserIds.contains(authorId)) return;
 
+        String formattedMessage = DiscordBot.formatEmotes(message);
+
         // Format message for Minecraft group chat with colored [Discord] prefix
         Component prefix = Component.blue("[Discord] ");
         Component name = Component.gold(author);
-        Component msg = Component.white(": " + message);
+        Component msg = Component.white(": " + formattedMessage);
         
         Component attachmentsChain = null;
         if (attachmentsArr != null && attachmentsArr.length > 0) {
