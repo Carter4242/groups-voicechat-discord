@@ -767,6 +767,58 @@ public final class DiscordBot {
     }
 
     /**
+     * Handles the !plist and !playerlist commands from Discord.
+     * Sends a formatted list of current players in the group to Discord.
+     */
+    private void handlePlayerListCommand() {
+        java.util.UUID groupId = null;
+        // Find groupId for this bot
+        for (var entry : GroupManager.groupBotMap.entrySet()) {
+            if (entry.getValue() == this) {
+                groupId = entry.getKey();
+                break;
+            }
+        }
+        
+        if (groupId == null) {
+            sendDiscordTextMessageAsync("Could not find associated group (**ERROR**)!");
+            return;
+        }
+
+        var players = GroupManager.groupPlayerMap.get(groupId);
+        if (players == null || players.isEmpty()) {
+            sendDiscordTextMessageAsync("**Player List:** No players currently in the group.");
+            return;
+        }
+
+        StringBuilder playerList = new StringBuilder();
+        playerList.append("Player List (**").append(players.size());
+        if (players.size() == 1) {
+            playerList.append(" player**):\n");
+        } else {
+            playerList.append(" players**):\n");
+        }
+
+        for (int i = 0; i < players.size(); i++) {
+            ServerPlayer player = players.get(i);
+            String playerName = platform.getName(player);
+            playerList.append("**").append(playerName).append("**");
+            
+            if (i < players.size() - 1) {
+                if (players.size() == 2) {
+                    playerList.append(" and ");
+                } else if (i == players.size() - 2) {
+                    playerList.append(", and ");
+                } else {
+                    playerList.append(", ");
+                }
+            }
+        }
+
+        sendDiscordTextMessageAsync(playerList.toString());
+    }
+
+    /**
      * Called from Rust when a Discord text message is sent in the managed VC channel.
      * Broadcasts the message to all group members in Simple Voice Chat.
      * @param author The Discord username
@@ -781,6 +833,12 @@ public final class DiscordBot {
 
         // Ignore messages from any bot user ID
         if (Core.botUserIds != null && Core.botUserIds.contains(authorId)) return;
+        // Check for player list commands
+        String trimmedMessage = message.trim();
+        if (trimmedMessage.equalsIgnoreCase("!plist") || trimmedMessage.equalsIgnoreCase("!playerlist")) {
+            handlePlayerListCommand();
+            return;
+        }
 
         String formattedMessage = DiscordBot.formatEmotes(message);
 

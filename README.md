@@ -65,6 +65,8 @@ debug_level: 1             # 0-3, higher = more verbose
 - `/dvcgroup restart` - Restart bot without deleting channel (group owner only)  
 - `/dvcgroup reloadconfig` - Reload the config
 - `/dvcgroupmsg <message>` - Send message to Discord channel and group members
+## Discord Commands
+- `!plist` or `!playerlist` - Display list of current players in the group
 
 ## Audio Features
 - Jitter buffering somewhat compensates for network issues
