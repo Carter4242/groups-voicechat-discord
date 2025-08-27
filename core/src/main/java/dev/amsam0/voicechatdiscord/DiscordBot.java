@@ -55,7 +55,7 @@ public final class DiscordBot {
      */
     public void createDiscordVoiceChannelAsync(String groupName, java.util.function.Consumer<Long> callback) {
         if (freed || ptr == 0) {
-            platform.warn("Attempted to create Discord channel after bot was freed or ptr was invalid (vcid=null, categoryId=" + categoryId + ")");
+            platform.warn("Attempted to create Discord channel after bot was freed or ptr was invalid (vcid=null)");
             callback.accept(null);
             return;
         }
@@ -65,14 +65,14 @@ public final class DiscordBot {
                 long channelId = _createDiscordVoiceChannel(ptr, initialName);
                 if (channelId != 0L) {
                     this.discordChannelId = channelId;
-                    platform.info("Created Discord voice channel '" + initialName + "' with vcid=" + channelId + " (categoryId=" + categoryId + ")");
+                    platform.debug("Created Discord voice channel '" + initialName + "' with vcid=" + channelId);
                     callback.accept(channelId);
                 } else {
-                    platform.error("Failed to create Discord voice channel for group '" + groupName + "' (vcid=null, categoryId=" + categoryId + "). Check Rust logs for details.");
+                    platform.error("Failed to create Discord voice channel for group '" + groupName + "' (vcid=null). Check Rust logs for details.");
                     callback.accept(null);
                 }
             } catch (Throwable t) {
-                platform.error("Exception while creating Discord voice channel for group '" + groupName + "' (vcid=null, categoryId=" + categoryId + ")", t);
+                platform.error("Exception while creating Discord voice channel for group '" + groupName + "' (vcid=null)", t);
                 callback.accept(null);
             }
         }, "DiscordChannelCreateThread").start();
@@ -100,17 +100,17 @@ public final class DiscordBot {
         }
         final Long channelIdToDelete = discordChannelId;
         if (channelIdToDelete == null) {
-            platform.warn("No Discord channel to delete for vcid=null (categoryId=" + categoryId + ")");
+            platform.warn("No Discord channel to delete for vcid=null");
             if (afterDelete != null) afterDelete.run();
             return;
         }
-        platform.info("Deleting Discord voice channel with vcid=" + channelIdToDelete + " (categoryId=" + categoryId + ")");
+        platform.debug("Deleting Discord voice channel with vcid=" + channelIdToDelete);
         deleteThread = new Thread(() -> {
             try {
                 _deleteDiscordVoiceChannel(ptr);
-                platform.info("Deleted Discord voice channel with vcid=" + channelIdToDelete + " (categoryId=" + categoryId + ")");
+                platform.debug("Deleted Discord voice channel with vcid=" + channelIdToDelete);
             } catch (Throwable t) {
-                platform.error("Exception while deleting Discord voice channel with vcid=" + channelIdToDelete + " (categoryId=" + categoryId + ")", t);
+                platform.error("Exception while deleting Discord voice channel with vcid=" + channelIdToDelete, t);
             } finally {
                 // Only clear if we deleted the same channel
                 if (discordChannelId != null && discordChannelId.equals(channelIdToDelete)) {
@@ -149,7 +149,7 @@ public final class DiscordBot {
         }
         final Long channelIdToUpdate = discordChannelId;
         if (channelIdToUpdate == null) {
-            platform.warn("No Discord channel to update for vcid=null (categoryId=" + categoryId + ")");
+            platform.warn("No Discord channel to update for vcid=null");
             return;
         }
         String playerWord = (playerCount == 1) ? "Player" : "Players";
@@ -157,9 +157,9 @@ public final class DiscordBot {
         new Thread(() -> {
             try {
                 _updateDiscordVoiceChannelName(ptr, newName);
-                platform.info("Updated Discord voice channel name to '" + newName + "' for vcid=" + channelIdToUpdate + " (categoryId=" + categoryId + ")");
+                platform.debug("Updated Discord voice channel name to '" + newName + "' for vcid=" + channelIdToUpdate);
             } catch (Throwable t) {
-                platform.error("Exception while updating Discord voice channel name for vcid=" + channelIdToUpdate + " (categoryId=" + categoryId + ")", t);
+                platform.error("Exception while updating Discord voice channel name for vcid=" + channelIdToUpdate, t);
             }
         }, "DiscordChannelUpdateNameThread").start();
     }
@@ -191,7 +191,7 @@ public final class DiscordBot {
         }
         final Long channelIdToSend = discordChannelId;
         if (channelIdToSend == null) {
-            platform.warn("No Discord channel to send text message for vcid=null (categoryId=" + categoryId + ")");
+            platform.warn("No Discord channel to send text message for vcid=null");
             return;
         }
 
@@ -211,7 +211,7 @@ public final class DiscordBot {
                     }
                 }
             } catch (Throwable t) {
-                platform.error("Exception while sending Discord text message for vcid=" + channelIdToSend + " (categoryId=" + categoryId + "). Check Rust logs for details.", t);
+                platform.error("Exception while sending Discord text message for vcid=" + channelIdToSend + ". Check Rust logs for details.", t);
             }
         }, "DiscordChannelSendTextThread").start();
     }
@@ -268,7 +268,7 @@ public final class DiscordBot {
                         sendDiscordAudioToGroup(groupId, new byte[0][][]);
                     }
                 } catch (Throwable t) {
-                    platform.error("Error in Discord audio thread for bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + ")", t);
+                    platform.error("Error in Discord audio thread for bot (vcid=" + discordChannelId + ")", t);
                 }
             }
         }, "DiscordAudioBridgeThread");
@@ -368,7 +368,7 @@ public final class DiscordBot {
                             }
                             playerChannels.put(discordUserId, newChannel);
                             channel = newChannel;
-                            platform.info("[sendDiscordAudioToGroup] Created StaticAudioChannel on the fly for player " + playerId + ", Discord user '" + username + "' (ID: " + discordUserId + ") in group " + groupId + " (vcid=" + discordChannelId + ")");
+                            platform.debug("[sendDiscordAudioToGroup] Created StaticAudioChannel on the fly for player " + playerId + ", Discord user '" + username + "' (ID: " + discordUserId + ") in group " + groupId + " (vcid=" + discordChannelId + ")");
                         } else {
                             platform.error("[sendDiscordAudioToGroup] Failed to create StaticAudioChannel for player " + playerId + ", Discord user '" + username + "' (ID: " + discordUserId + ") in group " + groupId + " (vcid=" + discordChannelId + ")");
                         }
@@ -417,10 +417,10 @@ public final class DiscordBot {
         }
         try {
             _logIn(ptr);
-            platform.debug("Logged into the bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + ")");
+            platform.debug("Logged into the bot (vcid=" + discordChannelId + ")");
             return true;
         } catch (Throwable e) {
-            platform.error("Failed to login to the bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + "). Check Rust logs for details.", e);
+            platform.error("Failed to login to the bot (vcid=" + discordChannelId + "). Check Rust logs for details.", e);
             return false;
         }
     }
@@ -435,12 +435,12 @@ public final class DiscordBot {
         try {
             String vcName = _start(ptr);
             if (vcName == null || vcName.equals("<panic>") || vcName.equals("<error>") || vcName.equals("<null pointer error>")) {
-                platform.error("Failed to start voice connection for bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + "). Check Rust logs for details. Returned: " + vcName);
+                platform.error("Failed to start voice connection for bot (vcid=" + discordChannelId + "). Check Rust logs for details. Returned: " + vcName);
             } else {
-                platform.info("Started voice chat for group in channel '" + vcName + "' with bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + ")");
+                platform.debug("Started voice chat for group in channel '" + vcName + "' with bot (vcid=" + discordChannelId + ")");
             }
         } catch (Throwable e) {
-            platform.error("Failed to start voice connection for bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + "). Check Rust logs for details.", e);
+            platform.error("Failed to start voice connection for bot (vcid=" + discordChannelId + "). Check Rust logs for details.", e);
         }
     }
 
@@ -466,20 +466,20 @@ public final class DiscordBot {
                     try {
                         _stop(ptr);
                     } catch (Throwable e) {
-                        platform.error("Failed to stop bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + "). Check Rust logs for details.", e);
+                        platform.error("Failed to stop bot (vcid=" + discordChannelId + "). Check Rust logs for details.", e);
                     }
-                    platform.info("DiscordBot.stop finished for vcid=" + discordChannelId + " (categoryId=" + categoryId + ")");
+                    platform.debug("DiscordBot.stop finished for vcid=" + discordChannelId);
                 });
             } else {
                 try {
                     _stop(ptr);
                 } catch (Throwable e) {
-                    platform.error("Failed to stop bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + "). Check Rust logs for details.", e);
+                    platform.error("Failed to stop bot (vcid=" + discordChannelId + "). Check Rust logs for details.", e);
                 }
-                platform.info("DiscordBot.stop finished for vcid=" + discordChannelId + " (categoryId=" + categoryId + ")");
+                platform.debug("DiscordBot.stop finished for vcid=" + discordChannelId);
             }
         } catch (Throwable e) {
-            platform.error("Failed to stop bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + "). Check Rust logs for details.", e);
+            platform.error("Failed to stop bot (vcid=" + discordChannelId + "). Check Rust logs for details.", e);
         }
     }
 
@@ -593,9 +593,9 @@ public final class DiscordBot {
         }
         try {
             _disconnect(ptr);
-            platform.info("Disconnected Discord bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + ") from voice channel (without deleting). ");
+            platform.debug("Disconnected Discord bot (vcid=" + discordChannelId + ") from voice channel (without deleting). ");
         } catch (Throwable e) {
-            platform.error("Failed to disconnect Discord bot (vcid=" + discordChannelId + ", categoryId=" + categoryId + "). Check Rust logs for details.", e);
+            platform.error("Failed to disconnect Discord bot (vcid=" + discordChannelId + "). Check Rust logs for details.", e);
         }
     }
 
@@ -725,7 +725,7 @@ public final class DiscordBot {
             }
         }
         if (foundGroupId == null) {
-            platform.info("[DiscordBot] No group found for Discord channel ID " + groupChannelId + " (vcid=" + groupChannelId + ")");
+            platform.debug("[DiscordBot] No group found for Discord channel ID " + groupChannelId + " (vcid=" + groupChannelId + ")");
             return;
         }
 
@@ -759,7 +759,7 @@ public final class DiscordBot {
                     .build();
                 Core.api.registerVolumeCategory(category);
                 discordUserCategoryMap.put(discordUserId, categoryId);
-                platform.info("Registered volume category for Discord user '" + username + "' (ID: " + discordUserId + ", catId: " + categoryId + ")");
+                platform.debug("Registered volume category for Discord user '" + username + "' (ID: " + discordUserId + ", catId: " + categoryId + ")");
             }
 
             // Create a StaticAudioChannel for this Discord user for every player in the group, and assign the category
@@ -778,7 +778,7 @@ public final class DiscordBot {
                                 .computeIfAbsent(foundGroupId, k -> new java.util.HashMap<>())
                                 .computeIfAbsent(playerId, k -> new java.util.HashMap<>())
                                 .put(discordUserId, staticChannel);
-                            platform.info("Created StaticAudioChannel for Discord user '" + username + "' and player " + playerId + " in group " + foundGroupId + " with category " + categoryId);
+                            platform.debug("Created StaticAudioChannel for Discord user '" + username + "' and player " + playerId + " in group " + foundGroupId + " with category " + categoryId);
                         } else {
                             platform.error("Failed to create StaticAudioChannel for Discord user '" + username + "' and player " + playerId + " in group " + foundGroupId);
                         }
@@ -790,7 +790,7 @@ public final class DiscordBot {
             GroupManager.discordUserChannelMap.remove(discordUserId);
             GroupManager.discordUserNameMap.remove(discordUserId);
             if (groupChannelId == null || groupChannelId == 0L) {
-                platform.info("[DiscordBot] No previous channel found for user " + discordUserId + " (vcid=null), cannot send leave message.");
+                platform.debug("[DiscordBot] No previous channel found for user " + discordUserId + " (vcid=null), cannot send leave message.");
                 return;
             }
 
@@ -801,7 +801,7 @@ public final class DiscordBot {
                 String categoryId = discordUserCategoryMap.remove(discordUserId);
                 if (categoryId != null) {
                     Core.api.unregisterVolumeCategory(categoryId);
-                    platform.info("Unregistered volume category for Discord user '" + username + "' (ID: " + discordUserId + ")");
+                    platform.debug("Unregistered volume category for Discord user '" + username + "' (ID: " + discordUserId + ")");
                 }
             }
         }
@@ -809,7 +809,7 @@ public final class DiscordBot {
         // Get all players in the group and send them a message
         var players = GroupManager.groupPlayerMap.get(foundGroupId);
         if (players == null || players.isEmpty()) {
-            platform.info("[DiscordBot] No players in group " + foundGroupId + " for Discord channel ID " + groupChannelId + " (vcid=" + groupChannelId + ")");
+            platform.debug("[DiscordBot] No players in group " + foundGroupId + " for Discord channel ID " + groupChannelId + " (vcid=" + groupChannelId + ")");
             return;
         }
         // Compose a message for Minecraft chat: [Discord] <username> joined/left the Discord voice channel.
