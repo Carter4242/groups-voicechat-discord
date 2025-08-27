@@ -1,51 +1,31 @@
-> ℹ️ **Note**
->
-> This project is in **Maintenance Mode**. This means that I currently do not plan to
-> implement any more features into the addon (PRs are welcome though!). I will try my
-> best to make bug fixes and support the latest Minecraft versions, but I cannot guarantee
-> these fixes will be made in a timely manner, if they are made at all.
-
 # Simple Voice Chat Discord Bridge
 
 [<img alt="Modrinth" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/available/modrinth_vector.svg">](https://modrinth.com/plugin/simple-voice-chat-discord-bridge)
-[<img alt="Requires Fabric API" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/requires/fabric-api_vector.svg">](https://modrinth.com/mod/fabric-api)
 
 > ⚠️ **Warning**
 >
 > This is not an official addon. **Please don't go to the Simple Voice Chat discord server for support! Instead, please use [GitHub issues](https://github.com/amsam0/voicechat-discord/issues)
 > for support.** I'll try to provide support as soon as possible but there is no guarantee for how long it will take.
 
-Simple Voice Chat Discord Bridge is a Simple Voice Chat addon for Fabric and Paper/Purpur that makes a bridge between Simple Voice Chat and Discord to allow for players without the mod to hear and speak. **For example,
-this addon allows Bedrock edition players connected through Geyser to use voice chat!**
 
-Changelog: https://github.com/amsam0/voicechat-discord/blob/main/CHANGELOG.md
+Simple Voice Chat Discord Bridge is a server-side plugin for Paper/Purpur that creates a method of voice communication between Minecraft players and Discord users via Discord Channels and SVC Groups. The plugin automatically creates temporary Discord voice channels for each Simple Voice Chat group, allowing Discord users to join and participate in voice chat without being in game.
 
-# Installation and Usage
+- Automatically creates Discord voice channels for SVC groups
+- Real-time Opus audio processing with jitter buffering
+- Text chat integration between Discord and Minecraft
 
-First, ensure that you have [Simple Voice Chat](https://modrinth.com/mod/simple-voice-chat) installed and correctly configured. Please refer to
-[the Simple Voice Chat wiki](https://modrepo.de/minecraft/voicechat/wiki) for more info.
+# Setup
 
-> ℹ️ **Note**
->
-> Simple Voice Chat Discord Bridge requires version 2.4.11 or later of Simple Voice Chat. Please ensure you have updated!
+## Requirements
+- [Simple Voice Chat](https://modrinth.com/mod/simple-voice-chat) 2.4.11+
+- Paper/Purpur server
 
-Then, you'll want to [download](https://modrinth.com/mod/simple-voice-chat-discord-bridge/versions) the latest version of Simple Voice Chat Discord Bridge that is compatible with your Minecraft
-version.
-
-> ℹ️ **Note**
->
-> If you are using the Fabric mod, it requires the [Fabric API](https://modrinth.com/mod/fabric-api).
-
-## Finding the configuration file
-
-Make sure to run your server once with Simple Voice Chat and Simple Voice Chat Discord Bridge installed to generate Simple Voice Chat Discord Bridge's configuration file.
-
-**Fabric:** Simple Voice Chat Discord Bridge's configuration file should be located at `config/voicechat-discord.yml`.
-
-**Paper/Purpur:** Simple Voice Chat Discord Bridge's configuration file should be located at `plugins/voicechat-discord/config.yml`.
+## Installation
+1. Download from Github Actions (for now)
+2. Place in `plugins` folder and restart server
+3. Configure `plugins/voicechat-discord/config.yml`
 
 ## Setting up a bot
-
 <sub>This guide is based off of and uses images from [DiscordSRV's Basic Setup guide](https://docs.discordsrv.com/installation/basic-setup/#setting-up-the-bot).</sub>
 
 First, create an application at [discord.com/developers/applications](https://discord.com/developers/applications) by clicking `New Application`. Choose the name that you want your bot to be called.
@@ -61,126 +41,67 @@ Copy the token and disable `Public Bot`.
 ![](https://docs.discordsrv.com/images/copy_token.png)
 
 Now, open [the configuration file](#finding-the-configuration-file) with a text editor. Replace `DISCORD_BOT_TOKEN_HERE` with the token you copied. It should look something like this:
-
+## Configuration
 ```yaml
-bots:
-    - token: TheTokenYouPasted
-      vc_id: VOICE_CHANNEL_ID_HERE
+category_id: YOUR_CATEGORY_ID_HERE
+bot_tokens:
+  - YOUR_BOT_TOKEN_HERE
+  - SECOND_BOT_TOKEN_HERE  # Optional: multiple concurrent groups
+bot_user_ids:
+  - BOT_USER_ID_HERE       # Bots to ignore for join/leave messages
+debug_level: 1             # 0-3, higher = more verbose
 ```
 
-To invite the bot to a server, go to `General Information` and copy the Application ID.
+> Each bot token allows one concurrent group with Discord integration.
 
-![](https://docs.discordsrv.com/images/copy_application_id.png)
+# Usage
 
-Go to
-[discord.com/api/oauth2/authorize?client_id=YOUR_APPLICATION_ID_HERE&permissions=36700160&scope=bot](https://discord.com/api/oauth2/authorize?client_id=YOUR_APPLICATION_ID_HERE&permissions=36700160&scope=bot)
-but replace `YOUR_APPLICATION_ID_HERE` with the application ID you just copied. Choose the server you want to invite your bot to. **Make sure not to disable any of its permissions.**
+## How It Works
+1. Player creates a SVC group (no password)
+2. Discord voice channel auto-created in the category in the configuration
+3. Discord users can join the channel and talk with Minecraft players
+4. When all members leave in game/group disbands, the Discord channel is auto-deleted
 
-Now, follow the steps at [support.discord.com/articles/Where-can-I-find-my-User-Server-Message-ID](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID-)
-to enable Developer Mode in Discord. Then, right click the voice channel you want the bot to use as a bridge between Simple Voice Chat and Discord and click `Copy ID`.
+## Commands
+- `/dvcgroup stop` - Stop Discord bot, delete channel (group owner only)
+- `/dvcgroup restart` - Restart bot without deleting channel (group owner only)  
+- `/dvcgroup reloadconfig` - Reload the config
+- `/dvcgroupmsg <message>` - Send message to Discord channel and group members
 
-> ⚠️ **Warning**
->
-> There cannot be more than one person speaking in the voice channel at a time, or there will be weird audio glitches. **We recommend limiting bot voice channels to 2 users to ensure that this does
-> not cause an issue.**
+## Audio Features
+- Jitter buffering somewhat compensates for network issues
+- Each Discord user gets individual volume controls in SVC
+- Automatic audio mixing for multiple speakers (both Minecraft -> Discord and Discord -> Minecraft)
 
-Now, reopen [the configuration file](#finding-the-configuration-file) with a text editor. Replace `VOICE_CHANNEL_ID_HERE` with the channel ID you copied. It should look something like this:
+# Troubleshooting
 
-```yaml
-bots:
-    - token: TheTokenYouPasted
-      vc_id: TheChannelIDYouPasted
-```
+**"No available Discord bots"** - All bots in use by other groups. Add more tokens or wait.
 
-You can redo this process for however many bots you want. There is some info in [the configuration file](#finding-the-configuration-file) about having multiple bots.
+**Bot can't create channel** - Check bot permissions and category ID in config.
 
-> ℹ️ **Note**
->
-> The amount of bots you have is equivalent to the amount of people who can be connected to Simple Voice Chat through Discord at one time. So if you have 3 bots, up to 3 people can use the addon at
-> the same time.
+**Audio issues** - Lower debug_level, check server resources, verify network connectivity.
 
-## Troubleshooting
+**Discord users can't hear MC players or vice versa** - Try `/dvcgroup restart`, verify group exists, check console errors.
 
-If you run into errors while trying to use a bot, please read the console. The errors will always include the vc_id of the bot, which allows you to identify which bot caused the error.
+## Debug Levels
+- `0` - No debug
+- `1` - Basic info (recommended) 
+- `2` - Verbose (troubleshooting)
+- `3` - Very verbose (development)
 
-## Using it in-game
 
-> ⚠️ **Warning**
->
-> There cannot be more than one person speaking in the voice channel at a time, or there will be weird audio glitches. **We recommend limiting bot voice channels to 2 users to ensure that this does
-> not cause an issue.**
+# Technical Info
 
-Most of Simple Voice Chat Discord Bridge's functionality is exposed through the `/dvc` command. This section will go through all of its subcommands.
+**Architecture**: Java core + Rust audio engine connected via JNI
 
-For commands that take string arguments, you can wrap them in quotes to escape spaces.
+**Audio Pipeline**: 
+- MC microphone → PCM Encoding → Combination into one channel → Opus Encoding Via Songbird/Symphonia → Discord
+- Discord Microphone → Forwarding to MC players via individual SVC Static Voice Channels
 
-### `/dvc start`
+**Current Compatibility**: MC 1.21.7+, SVC 2.4.11+, Java 21+, Paper/Purpur, Windows/Linux
 
-Starts a voice chat session using the first available bot. You may have to wait a few seconds for it to start. After it starts, join the voice channel as instructed. You should be able to hear players
-speak, and other players should be able to hear you speak.
+---
 
-If you are having issues while in a voice chat session, you can try restarting it by using `/dvc start` again.
+**Download**: [Modrinth](https://modrinth.com/plugin/simple-voice-chat-discord-bridge) | **Source**: [GitHub](https://github.com/amsam0/voicechat-discord) | **Support**: [Issues](https://github.com/amsam0/voicechat-discord/issues)
 
-### `/dvc stop`
-
-Stops the current voice chat session and disconnects the bot.
-
-### `/dvc group`
-
-Allows you to list, create, join, leave and remove groups.
-
-#### `/dvc group list`
-
-Gives you a list of all groups.
-
-#### `/dvc group create <name> [password] [type] [persistent]`
-
-Allows you to create a group.
-
-Arguments:
-
--   `name` (required): The name of the group.
--   `password` (optional, defaults to `""` (no password)): The password of the group. If you don't want a password but want to change the group type or persistency, just pass an empty string: `""`
--   `type` (optional, defaults to `normal`): Can be `normal`, `open` or `isolated`.
-    -   `normal`: Players in a group can hear nearby players that are not in a group, but not vice versa
-    -   `open`: Players in a group can hear nearby players and nearby players can hear players in the group
-    -   `isolated`: Players in a group can only hear other players in the group
--   `persistent` (optional, defaults to `false`): If `true`, the group will not be removed once all players leave. Instead, it has to be removed using [`/dvc group remove <ID>`](#dvc-group-remove-id)
-
-#### `/dvc group join <ID>`
-
-Allows you to join a group using an ID from [`/dvc group list`](#dvc-group-list).
-
-#### `/dvc group info`
-
-Gives you info about your current group.
-
-#### `/dvc group leave`
-
-Allows you to leave your current group.
-
-#### `/dvc group remove <ID>`
-
-Allows you to remove a **persistent** group **with no players in it** using an ID from [`/dvc group list`](#dvc-group-list).
-
-### `/dvc togglewhisper`
-
-Allows you to whisper.
-
-### `/dvc reloadconfig`
-
-If you are a operator (specifically permission level 2 or higher on fabric) or if you have the `voicechat-discord.reload-config` permission, you can use the `/dvc reloadconfig` subcommand to reload
-the config without have to reload/restart the server. **Using this subcommand will stop all running bots.**
-
-## Roadmap
-
-### Future
-
-Disclaimer: The items in this list are purely ideas and there is no guarantee of them being implemented.
-
--   Catch config errors such as not in config when getting bots
--   An option to lock the voice channels when they are not in use.
--   Reduce volume of crouching players in the audio that goes to discord. This is currently possible but not yet implemented
--   Action bar HUD for groups showing players in your group
--   Notifications for groups (a message is sent to you when someone joins/leaves the group you're in)
--   Inventory GUI for groups (this would need an abstraction between Bukkit's API and Fabric's sgui library, and would also make supporting 1.19.2+ on Fabric impossible)
+**Authors**: Carter4242 | **Simple Voice Chat Discord Bridge**: amsam0, Totobird | **Simple Voice Chat**: henkelmax
