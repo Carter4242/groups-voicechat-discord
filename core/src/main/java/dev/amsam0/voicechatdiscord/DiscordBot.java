@@ -27,6 +27,11 @@ public final class DiscordBot {
     // Store the Discord voice channel ID for this group
     private volatile Long discordChannelId = null;
 
+    // Track the last Discord message for join/leave consolidation
+    private volatile Long lastDiscordMessageId = null;
+    public volatile boolean lastMessageWasJoinLeave = false;
+    private volatile int lastMessageEditCount = 0;
+
     // Formats Discord emotes in a message to :name: for Minecraft display.
     private static final java.util.regex.Pattern EMOTE_PATTERN = java.util.regex.Pattern.compile("<a?:([A-Za-z0-9_]+):[0-9]+>");
 
@@ -110,6 +115,9 @@ public final class DiscordBot {
                 // Only clear if we deleted the same channel
                 if (discordChannelId != null && discordChannelId.equals(channelIdToDelete)) {
                     discordChannelId = null;
+                    lastDiscordMessageId = null;
+                    lastMessageWasJoinLeave = false;
+                    lastMessageEditCount = 0;
                 }
                 if (afterDelete != null) afterDelete.run();
             }
@@ -168,6 +176,15 @@ public final class DiscordBot {
      * @param message The message to send
      */
     public void sendDiscordTextMessageAsync(String message) {
+        sendDiscordTextMessageAsync(message, false);
+    }
+
+    /**
+     * Asynchronously sends a text message to the Discord voice channel's text chat.
+     * @param message The message to send
+     * @param isJoinLeaveMessage Whether this is a join/leave message that might be consolidated
+     */
+    public void sendDiscordTextMessageAsync(String message, boolean isJoinLeaveMessage) {
         if (freed || ptr == 0) {
             platform.warn("Attempted to send Discord text message after bot was freed or ptr was invalid (vcid=" + discordChannelId + ")");
             return;
@@ -177,17 +194,57 @@ public final class DiscordBot {
             platform.warn("No Discord channel to send text message for vcid=null (categoryId=" + categoryId + ")");
             return;
         }
+
         new Thread(() -> {
             try {
-                _sendDiscordTextMessage(ptr, message);
+                synchronized (this) {
+                    if (isJoinLeaveMessage && shouldEditLastMessage()) {
+                        editLastDiscordMessageAppend("\n" + message);
+                    } else {
+                        long messageId = _sendDiscordTextMessageWithId(ptr, message);
+                        
+                        if (messageId != 0) {
+                            lastDiscordMessageId = messageId;
+                            lastMessageWasJoinLeave = isJoinLeaveMessage;
+                            lastMessageEditCount = 0;
+                        }
+                    }
+                }
             } catch (Throwable t) {
                 platform.error("Exception while sending Discord text message for vcid=" + channelIdToSend + " (categoryId=" + categoryId + "). Check Rust logs for details.", t);
             }
         }, "DiscordChannelSendTextThread").start();
     }
 
-    // Native method for sending a text message
-    private static native void _sendDiscordTextMessage(long ptr, String message);
+    /**
+     * Checks if the last message should be edited instead of sending a new message.
+     * @return true if the last message was a join/leave message sent recently and hasn't been edited too many times
+     */
+    private boolean shouldEditLastMessage() {
+        return (lastDiscordMessageId != null && lastMessageWasJoinLeave && lastMessageEditCount < 9);
+    }
+
+    /**
+     * Edits the last Discord message by appending new content.
+     * @param contentToAppend The content to append to the existing message
+     */
+    private void editLastDiscordMessageAppend(String contentToAppend) {
+        if (lastDiscordMessageId == null) {
+            return;
+        }
+        try {
+            _editDiscordTextMessageAppend(ptr, lastDiscordMessageId, contentToAppend);
+            lastMessageEditCount++;
+        } catch (Throwable t) {
+            platform.error("Exception while appending to Discord text message (messageId=" + lastDiscordMessageId + ", vcid=" + discordChannelId + ")", t);
+        }
+    }
+
+    // Native method for appending to a text message
+    private static native void _editDiscordTextMessageAppend(long ptr, long messageId, String contentToAppend);
+
+    // Native method for sending a text message and returning the message ID
+    private static native long _sendDiscordTextMessageWithId(long ptr, String message);
 
     /**
      * Starts the background thread for Discord audio bridging.
@@ -739,7 +796,7 @@ public final class DiscordBot {
             platform.info("[DiscordBot] No players in group " + foundGroupId + " for Discord channel ID " + groupChannelId + " (vcid=" + groupChannelId + ")");
             return;
         }
-        // Compose a pretty message: [Discord] <username> joined/left the Discord voice channel.
+        // Compose a message for Minecraft chat: [Discord] <username> joined/left the Discord voice channel.
         Component prefix = Component.blue("[Discord] ");
         Component name = Component.gold(username);
         Component action = joined
@@ -833,6 +890,10 @@ public final class DiscordBot {
 
         // Ignore messages from any bot user ID
         if (Core.botUserIds != null && Core.botUserIds.contains(authorId)) return;
+
+        // Mark that a user message broke the join/leave chain
+        lastMessageWasJoinLeave = false;
+
         // Check for player list commands
         String trimmedMessage = message.trim();
         if (trimmedMessage.equalsIgnoreCase("!plist") || trimmedMessage.equalsIgnoreCase("!playerlist")) {

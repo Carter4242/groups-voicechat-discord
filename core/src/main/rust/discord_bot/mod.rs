@@ -66,6 +66,8 @@ pub struct DiscordBot {
     user_id_to_username: Arc<DashMap<u64, String>>,
     /// UUID for the audio source, used for poking after start
     audio_source_uuid: Arc<StdMutex<Option<Uuid>>>,
+    /// Track the content of the last message for efficient appending
+    last_message_content: Mutex<Option<String>>,
 }
 
 enum State {
@@ -107,6 +109,7 @@ impl DiscordBot {
             java_bot_obj,
             user_id_to_username: Arc::new(DashMap::new()),
             audio_source_uuid: Arc::new(StdMutex::new(None)),
+            last_message_content: Mutex::new(None),
         }
     }
 
@@ -181,6 +184,8 @@ impl DiscordBot {
                                 // Set to None after successful deletion
                                 let mut channel_id_lock = self.channel_id.lock();
                                 *channel_id_lock = None;
+                                // Clear stored message content since channel is deleted
+                                *self.last_message_content.lock() = None;
                             },
                             Ok(Err(e)) => {
                                 warn!(?e, "Failed to delete Discord voice channel with ID {}", channel_id);
@@ -248,14 +253,14 @@ impl DiscordBot {
         }
     }
 
-    /// Send a text message to the managed Discord voice channel's text chat.
-    pub async fn send_text_message(&self, message: &str) -> Result<(), Report> {
+    /// Send a text message and return the message ID.
+    pub async fn send_text_message_with_id(&self, message: &str) -> Result<serenity::all::MessageId, Report> {
         let result = std::panic::AssertUnwindSafe(async {
             let state = self.state.read();
             let http = match &*state {
                 State::LoggedIn { http } | State::Started { http, .. } => http.clone(),
                 _ => {
-                    warn!("send_text_message: Bot not logged in");
+                    warn!("send_text_message_with_id: Bot not logged in");
                     return Err(eyre::eyre!("Bot not logged in"));
                 }
             };
@@ -267,20 +272,73 @@ impl DiscordBot {
             let channel_id = match channel_id_opt {
                 Some(id) => id,
                 None => {
-                    warn!("send_text_message: No Discord channel to send text message");
+                    warn!("send_text_message_with_id: No Discord channel to send text message");
                     return Err(eyre::eyre!("No Discord channel to send text message"));
                 }
             };
             drop(state);
             use serenity::builder::CreateMessage;
             let msg = CreateMessage::new().content(message);
-            channel_id.send_message(http.as_ref(), msg).await?;
+            let sent_message = channel_id.send_message(http.as_ref(), msg).await?;
+            
+            // Store the message content for efficient appending
+            *self.last_message_content.lock() = Some(message.to_string());
+            
+            Ok(sent_message.id)
+        }).catch_unwind().await;
+        match result {
+            Ok(r) => r,
+            Err(_) => {
+                warn!("Caught panic in send_text_message_with_id (likely due to runtime shutdown)");
+                Err(eyre::eyre!("Panic occurred in send_text_message_with_id"))
+            }
+        }
+    }
+
+    /// Append content to a Discord text message.
+    pub async fn append_to_text_message(&self, message_id: serenity::all::MessageId, content_to_append: &str) -> Result<(), Report> {
+        let result = std::panic::AssertUnwindSafe(async {
+            let state = self.state.read();
+            let http = match &*state {
+                State::LoggedIn { http } | State::Started { http, .. } => http.clone(),
+                _ => {
+                    warn!("append_to_text_message: Bot not logged in");
+                    return Err(eyre::eyre!("Bot not logged in"));
+                }
+            };
+            // Copy out the channel_id, then drop the lock before awaiting
+            let channel_id_opt = {
+                let channel_id_lock = self.channel_id.lock();
+                *channel_id_lock
+            };
+            let channel_id = match channel_id_opt {
+                Some(id) => id,
+                None => {
+                    warn!("append_to_text_message: No Discord channel for editing message");
+                    return Err(eyre::eyre!("No Discord channel for editing message"));
+                }
+            };
+            drop(state);
+            
+            // Get the stored message content and append new content
+            let new_content = {
+                let mut content_lock = self.last_message_content.lock();
+                let current_content = content_lock.as_ref().ok_or_else(|| eyre::eyre!("No stored message content for appending"))?;
+                let new_content = format!("{}{}", current_content, content_to_append);
+                // Update the stored content
+                *content_lock = Some(new_content.clone());
+                new_content
+            };
+            
+            use serenity::builder::EditMessage;
+            let edit = EditMessage::new().content(new_content);
+            channel_id.edit_message(http.as_ref(), message_id, edit).await?;
             Ok(())
         }).catch_unwind().await;
         match result {
             Ok(r) => r,
             Err(_) => {
-                warn!("Caught panic in send_text_message (likely due to runtime shutdown)");
+                warn!("Caught panic in append_to_text_message (likely due to runtime shutdown)");
                 Ok(())
             }
         }

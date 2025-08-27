@@ -327,33 +327,73 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1updateDisco
     }
 }
 
-// JNI: Send a text message to the Discord voice channel's text chat
+// JNI: Send a text message to the Discord voice channel's text chatand return the message ID
 #[no_mangle]
-pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1sendDiscordTextMessage(
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1sendDiscordTextMessageWithId(
     mut env: JNIEnv<'_>,
     _obj: jobject,
     ptr: jlong,
     message: JString<'_>,
-) {
+) -> jlong {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let message: String = match env.get_string(&message) {
             Ok(s) => s.into(),
             Err(_) => {
                 tracing::error!("JNI: Could not get message string");
-                return;
+                return 0;
             }
         };
         let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
         let send_result = crate::runtime::RUNTIME.block_on(async {
-            discord_bot.send_text_message(&message).await
+            discord_bot.send_text_message_with_id(&message).await
         });
-        if let Err(e) = send_result {
-            tracing::error!(?e, "Failed to send Discord text message");
+        let message_id = match send_result {
+            Ok(id) => id.get() as i64,
+            Err(e) => {
+                tracing::error!(?e, "Failed to send Discord text message with ID");
+                0
+            }
+        };
+        let _ = Arc::into_raw(discord_bot);
+        message_id
+    }));
+    match result {
+        Ok(id) => id,
+        Err(payload) => {
+            log_jni_panic("DiscordBot__1sendDiscordTextMessageWithId", ptr, &payload);
+            0
+        }
+    }
+}
+
+// JNI: Append content to a Discord text message
+#[no_mangle]
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1editDiscordTextMessageAppend(
+    mut env: JNIEnv<'_>,
+    _obj: jobject,
+    ptr: jlong,
+    message_id: jlong,
+    content_to_append: JString<'_>,
+) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let content_to_append: String = match env.get_string(&content_to_append) {
+            Ok(s) => s.into(),
+            Err(_) => {
+                tracing::error!("JNI: Could not get content to append string");
+                return;
+            }
+        };
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
+        let edit_result = crate::runtime::RUNTIME.block_on(async {
+            discord_bot.append_to_text_message(serenity::all::MessageId::new(message_id as u64), &content_to_append).await
+        });
+        if let Err(e) = edit_result {
+            tracing::error!(?e, "Failed to append to Discord text message");
         }
         let _ = Arc::into_raw(discord_bot);
     }));
     if let Err(payload) = result {
-        log_jni_panic("DiscordBot__1sendDiscordTextMessage", ptr, &payload);
+        log_jni_panic("DiscordBot__1editDiscordTextMessageAppend", ptr, &payload);
     }
 }
 

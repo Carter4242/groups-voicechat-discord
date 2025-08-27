@@ -106,8 +106,8 @@ public final class GroupManager {
                 }
             }
 
-            String joinMsg = ">> **" + platform.getName(player) + "** joined the group! (" + playerCount + (playerCount == 1 ? " Player" : " Players") + ")";
-            bot.sendDiscordTextMessageAsync(joinMsg);
+            String joinMsg = "[<t:" + (System.currentTimeMillis() / 1000) + ":t>] **" + platform.getName(player) + "** joined the group! (" + playerCount + (playerCount == 1 ? " Player" : " Players") + ")";
+            bot.sendDiscordTextMessageAsync(joinMsg, true);
         }
     }
 
@@ -347,8 +347,8 @@ public final class GroupManager {
         if (players != null && !players.isEmpty()) {
             DiscordBot bot = groupBotMap.get(groupId);
             if (bot != null) {
-                String leaveMsg = ">> **" + playerName + "** left the group. (" + players.size() + (players.size() == 1 ? " Player" : " Players") + ")";
-                bot.sendDiscordTextMessageAsync(leaveMsg);
+                String leaveMsg = "[<t:" + (System.currentTimeMillis() / 1000) + ":t>] **" + playerName + "** left the group. (" + players.size() + (players.size() == 1 ? " Player" : " Players") + ")";
+                bot.sendDiscordTextMessageAsync(leaveMsg, true);
             }
         }
     }
