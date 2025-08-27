@@ -109,6 +109,30 @@ struct Handler {
     pub bot: Weak<super::DiscordBot>,
 }
 
+impl Handler {
+    /// Extract display name from PartialMember: nick -> global_name -> username  
+    fn get_display_name_from_partial_member(member: &serenity::all::PartialMember) -> String {
+        member.nick
+            .clone()
+            .or_else(|| {
+                member.user.as_ref()
+                    .and_then(|user| user.global_name.clone())
+            })
+            .unwrap_or_else(|| {
+                member.user.as_ref()
+                    .map(|user| user.name.clone())
+                    .unwrap_or_else(|| "<unknown>".to_string())
+            })
+    }
+
+    /// Extract display name from User: global_name -> username
+    fn get_display_name_from_user(user: &serenity::all::User) -> String {
+        user.global_name
+            .clone()
+            .unwrap_or_else(|| user.name.clone())
+    }
+}
+
 #[serenity::async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, _ready: Ready) {
@@ -124,16 +148,18 @@ impl EventHandler for Handler {
         _old: Option<serenity::all::VoiceState>,
         new: serenity::all::VoiceState,
     ) {
-        let user_id = new.user_id.get() as i64;
-        let username = if let Some(member) = &new.member {
-            member.user.name.clone()
-        } else {
-            "<unknown>".to_string()
-        };
+        let user_id = new.user_id.get();
+        let username = new.member
+            .as_ref()
+            .map(|member| member.display_name().to_string())
+            .unwrap_or_else(|| {
+                warn!("Voice state update for user {} has no member data", user_id);
+                "<unknown>".to_string()
+            });
 
         if let Some(bot) = self.bot.upgrade() {
             // Always update the user_id -> username map
-            bot.update_username_mapping(user_id as u64, &username);
+            bot.update_username_mapping(user_id, &username);
 
             let mut env = bot.java_vm.attach_current_thread().expect("Failed to attach thread to JVM");
             if let Some(channel_id) = new.channel_id {
@@ -141,9 +167,9 @@ impl EventHandler for Handler {
                 crate::discord_bot::jni_bridge::notify_java_discord_user_voice_state(
                     &mut env,
                     bot.java_bot_obj.as_obj(),
-                    user_id as u64,
+                    user_id,
                     &username,
-                    channel_id.get() as u64,
+                    channel_id.get(),
                     true,
                 );
             } else {
@@ -151,7 +177,7 @@ impl EventHandler for Handler {
                 crate::discord_bot::jni_bridge::notify_java_discord_user_voice_state(
                     &mut env,
                     bot.java_bot_obj.as_obj(),
-                    user_id as u64,
+                    user_id,
                     &username,
                     0,
                     false,
@@ -169,8 +195,12 @@ impl EventHandler for Handler {
             if let Some(managed_channel_id) = channel_id_opt {
                 // Only forward messages sent in the managed channel
                 if msg.channel_id == managed_channel_id {
-                    let author = msg.author.name.clone();
-                    let author_id = msg.author.id.get() as u64;
+                    let author_display_name = msg.member
+                        .as_ref()
+                        .map(|member| Self::get_display_name_from_partial_member(member))
+                        .unwrap_or_else(|| Self::get_display_name_from_user(&msg.author));
+
+                    let author_id = msg.author.id.get();
                     let content = msg.content.clone();
 
                     // Collect attachments as Vec<(String, String)>: (filename, url)
@@ -183,10 +213,10 @@ impl EventHandler for Handler {
                     crate::discord_bot::jni_bridge::notify_java_discord_text_message(
                         &mut env,
                         bot.java_bot_obj.as_obj(),
-                        &author,
+                        &author_display_name,
                         author_id,
                         &content,
-                        managed_channel_id.get() as u64,
+                        managed_channel_id.get(),
                         &attachments,
                     );
                 }

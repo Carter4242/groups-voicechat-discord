@@ -68,6 +68,7 @@ impl super::DiscordBot {
                     vc_id: channel_id,
                     bot: Arc::clone(&bot_for_async),
                     ssrc_username_map: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                    ssrc_user_id_map: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                     last_ssrc_order: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
                 };
                 call.add_global_event(CoreEvent::VoiceTick.into(), handler.clone());

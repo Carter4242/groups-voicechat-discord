@@ -27,8 +27,8 @@ mod log_in;
 mod start;
 
 struct DiscordToMinecraftBuffer {
-    received_audio_tx: flume::Sender<Vec<(String, Vec<u8>)>>,
-    received_audio_rx: flume::Receiver<Vec<(String, Vec<u8>)>>,
+    received_audio_tx: flume::Sender<Vec<(String, u64, Vec<u8>)>>,
+    received_audio_rx: flume::Receiver<Vec<(String, u64, Vec<u8>)>>,
 }
 
 
@@ -395,7 +395,7 @@ impl DiscordBot {
         Ok(())
     }
 
-    pub fn block_for_speaking_opus_data(&self) -> Result<Vec<(String, Vec<u8>)>, Report> {
+    pub fn block_for_speaking_opus_data(&self) -> Result<Vec<(String, u64, Vec<u8>)>, Report> {
         match self.discord_to_mc_buffer.received_audio_rx.recv_timeout(Duration::from_millis(50)) {
             Ok(data) => Ok(data),
             Err(flume::RecvTimeoutError::Timeout) => {

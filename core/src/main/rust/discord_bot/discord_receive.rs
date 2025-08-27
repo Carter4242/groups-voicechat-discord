@@ -14,6 +14,7 @@ pub struct VoiceHandler {
     pub vc_id: ChannelId,
     pub bot: std::sync::Arc<super::DiscordBot>,
     pub ssrc_username_map: std::sync::Arc<Mutex<HashMap<u32, String>>>,
+    pub ssrc_user_id_map: std::sync::Arc<Mutex<HashMap<u32, u64>>>,
     pub last_ssrc_order: std::sync::Arc<Mutex<VecDeque<u32>>>,
 }
 
@@ -31,8 +32,10 @@ impl EventHandler for VoiceHandler {
                 };
                 if !already_mapped {
                     if let Some(username) = self.bot.lookup_username(user_id.0) {
-                        let mut map = self.ssrc_username_map.lock().unwrap();
-                        map.insert(speaking.ssrc, username);
+                        let mut username_map = self.ssrc_username_map.lock().unwrap();
+                        let mut user_id_map = self.ssrc_user_id_map.lock().unwrap();
+                        username_map.insert(speaking.ssrc, username);
+                        user_id_map.insert(speaking.ssrc, user_id.0);
                     }
                 }
             }
@@ -91,11 +94,14 @@ impl EventHandler for VoiceHandler {
             let mut user_payloads = Vec::new();
             for &ssrc in new_order.iter() {
                 if let Some(payload) = payload_map.get(&ssrc) {
-                    let username = {
-                        let map = self.ssrc_username_map.lock().unwrap();
-                        map.get(&ssrc).cloned().unwrap_or_else(|| "Unknown User".to_string())
+                    let (username, user_id) = {
+                        let username_map = self.ssrc_username_map.lock().unwrap();
+                        let user_id_map = self.ssrc_user_id_map.lock().unwrap();
+                        let username = username_map.get(&ssrc).cloned().unwrap_or_else(|| "Unknown User".to_string());
+                        let user_id = user_id_map.get(&ssrc).copied().unwrap_or(0);
+                        (username, user_id)
                     };
-                    user_payloads.push((username, payload.clone()));
+                    user_payloads.push((username, user_id, payload.clone()));
                 }
             }
 

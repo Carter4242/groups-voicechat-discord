@@ -278,18 +278,18 @@ public final class DiscordBot {
 
     
     /**
-     * Send a list of Discord Opus audio packets (with usernames) to all group members in the specified group.
+     * Send a list of Discord Opus audio packets (with usernames and user IDs) to all group members in the specified group.
      * @param groupId The group to send audio to
-     * @param userPackets Array of [usernameBytes, opusBytes] for each packet
+     * @param userPackets Array of [usernameBytes, userIdBytes, opusBytes] for each packet
      */
     public void sendDiscordAudioToGroup(UUID groupId, byte[][][] userPackets) {
         // Collect currently talking Discord usernames
         java.util.Set<String> talkingUsersSet = new java.util.HashSet<>();
         for (int i = 0; i < userPackets.length; i++) {
             byte[][] tuple = userPackets[i];
-            if (tuple == null || tuple.length != 2) continue;
+            if (tuple == null || tuple.length != 3) continue;
             String username = new String(tuple[0]);
-            byte[] opusData = tuple[1];
+            byte[] opusData = tuple[2];
             if (opusData != null && opusData.length > 0 && username != null && !username.isEmpty()) {
                 talkingUsersSet.add(username);
             }
@@ -339,14 +339,19 @@ public final class DiscordBot {
         if (groupChannels == null) return;
         for (int i = 0; i < userPackets.length; i++) {
             byte[][] tuple = userPackets[i];
-            if (tuple == null || tuple.length != 2) continue;
+            if (tuple == null || tuple.length != 3) continue;
             String username = new String(tuple[0]);
-            byte[] opusData = tuple[1];
+            // Extract Discord user ID from bytes using ByteBuffer
+            long discordUserId = 0;
+            if (tuple[1].length >= 8) {
+                discordUserId = java.nio.ByteBuffer.wrap(tuple[1]).order(java.nio.ByteOrder.LITTLE_ENDIAN).getLong();
+            }
+            byte[] opusData = tuple[2];
             if (opusData == null || opusData.length == 0 || username == null || username.isEmpty()) continue;
             for (var entry : groupChannels.entrySet()) {
                 var playerId = entry.getKey();
                 var playerChannels = entry.getValue();
-                var channel = playerChannels != null ? playerChannels.get(username) : null;
+                var channel = playerChannels != null ? playerChannels.get(discordUserId) : null;
                 if (channel == null) {
                     // Create channel on the fly
                     var connection = Core.api.getConnectionOf(playerId);
@@ -357,11 +362,15 @@ public final class DiscordBot {
                         var randomChannelId = UUID.randomUUID();
                         var newChannel = Core.api.createStaticAudioChannel(randomChannelId, level, connection);
                         if (newChannel != null) {
-                            playerChannels.put(username, newChannel);
+                            String categoryId = discordUserCategoryMap.get(discordUserId);
+                            if (categoryId != null) {
+                                newChannel.setCategory(categoryId);
+                            }
+                            playerChannels.put(discordUserId, newChannel);
                             channel = newChannel;
-                            platform.info("[sendDiscordAudioToGroup] Created StaticAudioChannel on the fly for player " + playerId + ", username '" + username + "' in group " + groupId + " (vcid=" + discordChannelId + ")");
+                            platform.info("[sendDiscordAudioToGroup] Created StaticAudioChannel on the fly for player " + playerId + ", Discord user '" + username + "' (ID: " + discordUserId + ") in group " + groupId + " (vcid=" + discordChannelId + ")");
                         } else {
-                            platform.error("[sendDiscordAudioToGroup] Failed to create StaticAudioChannel for player " + playerId + ", username '" + username + "' in group " + groupId + " (vcid=" + discordChannelId + ")");
+                            platform.error("[sendDiscordAudioToGroup] Failed to create StaticAudioChannel for player " + playerId + ", Discord user '" + username + "' (ID: " + discordUserId + ") in group " + groupId + " (vcid=" + discordChannelId + ")");
                         }
                     } else {
                         platform.error("[sendDiscordAudioToGroup] Cannot create StaticAudioChannel: missing group, level, or connection for player " + playerId + " (vcid=" + discordChannelId + ")");
@@ -594,13 +603,13 @@ public final class DiscordBot {
     private native void _disconnect(long ptr);
 
     /**
-     * Removes all StaticAudioChannels for a Discord username from a group for all players.
+     * Removes all StaticAudioChannels for a Discord user ID from a group for all players.
      */
-    public static void removeDiscordUserChannelsFromGroup(UUID groupId, String username) {
+    public static void removeDiscordUserChannelsFromGroup(UUID groupId, Long discordUserId) {
         var groupChannels = GroupManager.groupAudioChannels.get(groupId);
         if (groupChannels != null) {
             for (var playerChannels : groupChannels.values()) {
-                playerChannels.remove(username);
+                playerChannels.remove(discordUserId);
             }
         }
     }
@@ -676,7 +685,7 @@ public final class DiscordBot {
                     }
                 }
                 if (oldGroupId != null) {
-                    removeDiscordUserChannelsFromGroup(oldGroupId, username);
+                    removeDiscordUserChannelsFromGroup(oldGroupId, discordUserId);
                     var oldPlayers = GroupManager.groupPlayerMap.get(oldGroupId);
                     if (oldPlayers != null && !oldPlayers.isEmpty()) {
                         Component prefix = Component.blue("[Discord] ");
@@ -734,10 +743,17 @@ public final class DiscordBot {
             // Use a base-26 (a-z) encoding for the category ID, max 16 chars
             String categoryId = toBase26CategoryId(discordUserId);
             if (!discordUserCategoryMap.containsKey(discordUserId)) {
+                // Truncate username to 16 characters to fit VoiceChat's limit, add "..." if truncated
+                String truncatedName;
+                if (username.length() > 16) {
+                    truncatedName = username.substring(0, 13) + "...";
+                } else {
+                    truncatedName = username;
+                }
                 var icon = Core.loadDiscordIcon();
                 var category = Core.api.volumeCategoryBuilder()
                     .setId(categoryId)
-                    .setName(username)
+                    .setName(truncatedName)
                     .setDescription("Volume for Discord user " + username)
                     .setIcon(icon)
                     .build();
@@ -761,7 +777,7 @@ public final class DiscordBot {
                             GroupManager.groupAudioChannels
                                 .computeIfAbsent(foundGroupId, k -> new java.util.HashMap<>())
                                 .computeIfAbsent(playerId, k -> new java.util.HashMap<>())
-                                .put(username, staticChannel);
+                                .put(discordUserId, staticChannel);
                             platform.info("Created StaticAudioChannel for Discord user '" + username + "' and player " + playerId + " in group " + foundGroupId + " with category " + categoryId);
                         } else {
                             platform.error("Failed to create StaticAudioChannel for Discord user '" + username + "' and player " + playerId + " in group " + foundGroupId);
@@ -779,7 +795,7 @@ public final class DiscordBot {
             }
 
             // Remove all StaticAudioChannels for this Discord user for every player in the group
-            removeDiscordUserChannelsFromGroup(foundGroupId, username);
+            removeDiscordUserChannelsFromGroup(foundGroupId, discordUserId);
             // Only unregister the category if the new channelId is zero (user left VC, not just switched)
             if (channelId == 0L) {
                 String categoryId = discordUserCategoryMap.remove(discordUserId);

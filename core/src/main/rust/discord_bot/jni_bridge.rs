@@ -468,15 +468,18 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1blockForSpe
                 // Create the main array as [[[B]] (3D byte array)
                 let tuple_arr_class = env.find_class("[[B").expect("Couldn't find [[B class");
                 let arr = env.new_object_array(opus_packets.len() as i32, tuple_arr_class, JObject::null()).expect("Couldn't create main [[[B array");
-                for (i, (username, payload)) in opus_packets.iter().enumerate() {
+                for (i, (username, user_id, payload)) in opus_packets.iter().enumerate() {
                     let username_bytes = username.as_bytes();
+                    let user_id_bytes = user_id.to_le_bytes();
                     let j_username = env.byte_array_from_slice(username_bytes).expect("Couldn't create byte array from username");
+                    let j_user_id = env.byte_array_from_slice(&user_id_bytes).expect("Couldn't create byte array from user_id");
                     let j_payload = env.byte_array_from_slice(payload).expect("Couldn't create byte array from payload");
-                    // Create a 2D byte array (byte[][]) for the tuple [usernameBytes, opusBytes]
+                    // Create a 2D byte array (byte[][]) for the tuple [usernameBytes, userIdBytes, opusBytes]
                     let tuple_arr_class = env.find_class("[B").expect("Couldn't find [B class");
-                    let tuple_arr = env.new_object_array(2, tuple_arr_class, JObject::null()).expect("Couldn't create tuple array");
+                    let tuple_arr = env.new_object_array(3, tuple_arr_class, JObject::null()).expect("Couldn't create tuple array");
                     env.set_object_array_element(&tuple_arr, 0, JObject::from(j_username)).expect("Couldn't set username element");
-                    env.set_object_array_element(&tuple_arr, 1, JObject::from(j_payload)).expect("Couldn't set payload element");
+                    env.set_object_array_element(&tuple_arr, 1, JObject::from(j_user_id)).expect("Couldn't set user_id element");
+                    env.set_object_array_element(&tuple_arr, 2, JObject::from(j_payload)).expect("Couldn't set payload element");
                     env.set_object_array_element(&arr, i as i32, JObject::from(tuple_arr)).expect("Couldn't set tuple array element");
                 }
                 arr.into_raw()
