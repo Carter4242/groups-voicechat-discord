@@ -238,6 +238,12 @@ public final class GroupManager {
             if (found == null) {
                 platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")! All bots are started or already assigned.\n" +
                     "Bot status: " + Core.bots.stream().map(b -> "started=" + b.isStarted() + ", assigned=" + groupBotMap.containsValue(b)).toList());
+                // Send a message to the player who created the group
+                Component message = Component.red("[Discord] ")
+                    .append(Component.white("Unable to create Discord voice channel for group '"))
+                    .append(Component.yellow(group.getName()))
+                    .append(Component.white("'. No Discord bots are available."));
+                platform.sendMessage(player, message);
                 return;
             }
             final DiscordBot bot = found;
@@ -293,6 +299,12 @@ public final class GroupManager {
             }, "voicechat-discord: Bot AutoStart for Group").start();
         } else {
             platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")");
+            // Send a message to the player who created the group
+            Component message = Component.red("[Discord] ")
+                .append(Component.white("Unable to create Discord voice channel for group '"))
+                .append(Component.yellow(group.getName()))
+                .append(Component.white("'. No Discord bots are configured."));
+            platform.sendMessage(player, message);
         }
     }
 
