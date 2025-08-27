@@ -68,7 +68,7 @@ debug_level: 1             # 0-3, higher = more verbose
 - `/grm <message>` - Alias for `/dvcgroupmsg`
 
 ## Discord Commands
-- `!plist` or `!playerlist` - Display list of current players in the group
+- `!pl`, `!plist`, or `!playerlist` - Display list of current players in the group
 
 ## Audio Features
 - Jitter buffering somewhat compensates for network issues

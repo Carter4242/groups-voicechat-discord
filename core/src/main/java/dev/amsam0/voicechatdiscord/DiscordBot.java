@@ -856,15 +856,21 @@ public final class DiscordBot {
             playerList.append(" players**):\n");
         }
 
+        // Sort player names alphabetically
+        java.util.List<String> sortedNames = new java.util.ArrayList<>();
         for (int i = 0; i < players.size(); i++) {
             ServerPlayer player = players.get(i);
-            String playerName = platform.getName(player);
+            sortedNames.add(platform.getName(player));
+        }
+        java.util.Collections.sort(sortedNames, String.CASE_INSENSITIVE_ORDER);
+
+        for (int i = 0; i < sortedNames.size(); i++) {
+            String playerName = sortedNames.get(i);
             playerList.append("**").append(playerName).append("**");
-            
-            if (i < players.size() - 1) {
-                if (players.size() == 2) {
+            if (i < sortedNames.size() - 1) {
+                if (sortedNames.size() == 2) {
                     playerList.append(" and ");
-                } else if (i == players.size() - 2) {
+                } else if (i == sortedNames.size() - 2) {
                     playerList.append(", and ");
                 } else {
                     playerList.append(", ");
@@ -896,7 +902,7 @@ public final class DiscordBot {
 
         // Check for player list commands
         String trimmedMessage = message.trim();
-        if (trimmedMessage.equalsIgnoreCase("!plist") || trimmedMessage.equalsIgnoreCase("!playerlist")) {
+        if (trimmedMessage.equalsIgnoreCase("!plist") || trimmedMessage.equalsIgnoreCase("!playerlist") || trimmedMessage.equalsIgnoreCase("!pl")) {
             handlePlayerListCommand();
             return;
         }
