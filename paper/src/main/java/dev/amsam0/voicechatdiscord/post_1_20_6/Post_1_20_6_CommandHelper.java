@@ -18,6 +18,7 @@ public class Post_1_20_6_CommandHelper implements CommandHelper {
             final Commands commands = event.registrar();
             commands.register(SubCommands.build(Commands.literal("dvcgroup")).build());
             commands.register(SubCommands.buildMsg(Commands.literal("dvcgroupmsg")).build());
+            commands.register(SubCommands.buildMsg(Commands.literal("grm")).build());
         });
     }
 
