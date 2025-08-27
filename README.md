@@ -3,7 +3,7 @@
 > ⚠️ **Warning**
 >
 > This is not an official addon. **Please don't go to the Simple Voice Chat discord server for support! Instead, please use [GitHub issues](https://github.com/amsam0/voicechat-discord/issues)
-> for support.** I'll try to provide support as soon as possible but there is no guarantee for how long it will take.
+> for support.**
 
 
 Simple Voice Chat Discord Bridge is a server-side plugin for Paper/Purpur that creates a method of voice communication between Minecraft players and Discord users via Discord Channels and SVC Groups. The plugin automatically creates temporary Discord voice channels for each Simple Voice Chat group, allowing Discord users to join and participate in voice chat without being in game.
