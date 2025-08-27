@@ -115,6 +115,26 @@ public final class GroupManager {
     public static void onJoinGroup(JoinGroupEvent event) {
         Group group = event.getGroup();
         UUID groupId = group.getId();
+        ServerPlayer player = event.getConnection().getPlayer();
+        
+        // Check if player was in a different Discord group before and remove them
+        UUID previousDiscordGroup = null;
+        for (Map.Entry<UUID, List<ServerPlayer>> entry : groupPlayerMap.entrySet()) {
+            UUID otherGroupId = entry.getKey();
+            if (!otherGroupId.equals(groupId) && groupBotMap.containsKey(otherGroupId)) {
+                List<ServerPlayer> otherPlayers = entry.getValue();
+                if (otherPlayers.stream().anyMatch(p -> p.getUuid().equals(player.getUuid()))) {
+                    previousDiscordGroup = otherGroupId;
+                    break;
+                }
+            }
+        }
+        
+        // Remove player from previous Discord group if they were in one
+        if (previousDiscordGroup != null) {
+            removePlayerFromGroup(previousDiscordGroup, player.getUuid(), platform.getName(player));
+        }
+        
         // If group is still pending Discord channel creation, queue the join event
         if (pendingGroupCreations.containsKey(groupId)) {
             platform.info("[onJoinGroup] Group " + group.getName() + " (" + groupId + ") is pending Discord channel creation; queuing join event for player " + platform.getName(event.getConnection().getPlayer()) + " (" + event.getConnection().getPlayer().getUuid() + ")");
@@ -128,7 +148,6 @@ public final class GroupManager {
             platform.info("[onJoinGroup] Skipping group " + group.getName() + " (" + groupId + "): not in groupBotMap (not a Discord group)");
             return;
         }
-        ServerPlayer player = event.getConnection().getPlayer();
 
         platform.info("[onJoinGroup] Event fired for group: " + group.getName() + " (" + group.getId() + ") and player: " + platform.getName(player) + " (" + player.getUuid() + ")");
         platform.info("[onJoinGroup] groupId=" + group.getId());
