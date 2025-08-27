@@ -1,7 +1,5 @@
 # Simple Voice Chat Discord Bridge
 
-[<img alt="Modrinth" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/available/modrinth_vector.svg">](https://modrinth.com/plugin/simple-voice-chat-discord-bridge)
-
 > ⚠️ **Warning**
 >
 > This is not an official addon. **Please don't go to the Simple Voice Chat discord server for support! Instead, please use [GitHub issues](https://github.com/amsam0/voicechat-discord/issues)
@@ -21,7 +19,7 @@ Simple Voice Chat Discord Bridge is a server-side plugin for Paper/Purpur that c
 - Paper/Purpur server
 
 ## Installation
-1. Download from Github Actions (for now)
+1. Download from Github Actions
 2. Place in `plugins` folder and restart server
 3. Configure `plugins/voicechat-discord/config.yml`
 
