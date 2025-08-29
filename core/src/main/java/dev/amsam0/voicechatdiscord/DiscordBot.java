@@ -31,6 +31,10 @@ public final class DiscordBot {
     private volatile Long lastDiscordMessageId = null;
     public volatile boolean lastMessageWasJoinLeave = false;
     private volatile int lastMessageEditCount = 0;
+    
+    // Batching for message edits
+    private final java.util.List<String> pendingEdits = new java.util.ArrayList<>();
+    private volatile boolean editInProgress = false;
 
     // Formats Discord emotes in a message to :name: for Minecraft display.
     private static final java.util.regex.Pattern EMOTE_PATTERN = java.util.regex.Pattern.compile("<a?:([A-Za-z0-9_]+):[0-9]+>");
@@ -118,6 +122,10 @@ public final class DiscordBot {
                     lastDiscordMessageId = null;
                     lastMessageWasJoinLeave = false;
                     lastMessageEditCount = 0;
+                    synchronized (DiscordBot.this) {
+                        pendingEdits.clear();
+                        editInProgress = false;
+                    }
                 }
                 if (afterDelete != null) afterDelete.run();
             }
@@ -199,12 +207,20 @@ public final class DiscordBot {
             try {
                 synchronized (this) {
                     if (isJoinLeaveMessage && shouldEditLastMessage()) {
-                        editLastDiscordMessageAppend("\n" + message);
+                        // Add to pending edits and process batch
+                        pendingEdits.add(message);
+                        
+                        if (!editInProgress) {
+                            editInProgress = true;
+                            processBatchedEdits();
+                        }
                     } else {
                         long messageId = _sendDiscordTextMessageWithId(ptr, message);
                         
                         if (messageId != 0) {
-                            lastDiscordMessageId = messageId;
+                            if (isJoinLeaveMessage) {
+                                lastDiscordMessageId = messageId;
+                            }
                             lastMessageWasJoinLeave = isJoinLeaveMessage;
                             lastMessageEditCount = 0;
                         }
@@ -217,27 +233,48 @@ public final class DiscordBot {
     }
 
     /**
+     * Processes all pending edits in a batch, combining them into a single edit operation.
+     * This method should only be called when editInProgress is true and the caller owns the lock.
+     */
+    private void processBatchedEdits() {
+        try {
+            // Small delay to allow more edits to accumulate
+            Thread.sleep(50);
+            
+            // Collect all pending edits while holding the lock
+            java.util.List<String> editsToProcess;
+            synchronized (this) {
+                editsToProcess = new java.util.ArrayList<>(pendingEdits);
+                pendingEdits.clear();
+                editInProgress = false;
+            }
+            
+            if (!editsToProcess.isEmpty() && lastDiscordMessageId != null) {
+                // Combine all edits into a single string
+                StringBuilder batchedContent = new StringBuilder();
+                for (String edit : editsToProcess) {
+                    batchedContent.append("\n").append(edit);
+                }
+                
+                _editDiscordTextMessageAppend(ptr, lastDiscordMessageId, batchedContent.toString());
+                lastMessageEditCount++;
+            }
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        } catch (Throwable t) {
+            synchronized (this) {
+                editInProgress = false;
+            }
+            platform.error("Exception while processing batched Discord message edits (messageId=" + lastDiscordMessageId + ", vcid=" + discordChannelId + ")", t);
+        }
+    }
+
+    /**
      * Checks if the last message should be edited instead of sending a new message.
      * @return true if the last message was a join/leave message sent recently and hasn't been edited too many times
      */
     private boolean shouldEditLastMessage() {
-        return (lastDiscordMessageId != null && lastMessageWasJoinLeave && lastMessageEditCount < 9);
-    }
-
-    /**
-     * Edits the last Discord message by appending new content.
-     * @param contentToAppend The content to append to the existing message
-     */
-    private void editLastDiscordMessageAppend(String contentToAppend) {
-        if (lastDiscordMessageId == null) {
-            return;
-        }
-        try {
-            _editDiscordTextMessageAppend(ptr, lastDiscordMessageId, contentToAppend);
-            lastMessageEditCount++;
-        } catch (Throwable t) {
-            platform.error("Exception while appending to Discord text message (messageId=" + lastDiscordMessageId + ", vcid=" + discordChannelId + ")", t);
-        }
+        return (lastDiscordMessageId != null && lastMessageWasJoinLeave && lastMessageEditCount < 14);
     }
 
     // Native method for appending to a text message
@@ -491,6 +528,10 @@ public final class DiscordBot {
     public void free() {
         freed = true;
         stopDiscordAudioThread();
+        synchronized (this) {
+            pendingEdits.clear();
+            editInProgress = false;
+        }
         if (ptr != 0) {
             _free(ptr);
             ptr = 0;
