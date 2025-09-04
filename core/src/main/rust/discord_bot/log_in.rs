@@ -136,10 +136,9 @@ impl Handler {
 #[serenity::async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, _ready: Ready) {
-        self.log_in_tx
-            .send(Ok(ctx.http))
-            .await
-            .expect("log_in rx dropped - please file a GitHub issue");
+        if let Err(e) = self.log_in_tx.send(Ok(ctx.http)).await {
+            tracing::error!("log_in rx dropped - login result could not be sent: {e}");
+        }
     }
 
     async fn voice_state_update(
