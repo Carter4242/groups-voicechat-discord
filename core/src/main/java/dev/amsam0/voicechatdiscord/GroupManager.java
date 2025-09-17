@@ -94,6 +94,10 @@ public final class GroupManager {
                             var level = player.getServerLevel();
                             var staticChannel = Core.api.createStaticAudioChannel(UUID.randomUUID(), level, connection);
                             if (staticChannel != null) {
+                                String categoryId = DiscordBot.discordUserCategoryMap.get(discordUserId);
+                                if (categoryId != null) {
+                                    staticChannel.setCategory(categoryId);
+                                }
                                 groupAudioChannels
                                     .computeIfAbsent(group.getId(), k -> new HashMap<>())
                                     .computeIfAbsent(playerId, k -> new HashMap<>())
