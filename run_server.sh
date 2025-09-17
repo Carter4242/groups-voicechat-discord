@@ -42,7 +42,7 @@ if [ "$platform" == "paper" ]; then
   # Download voicechat
   file="paper/run/$minecraftVersion/plugins/voicechat-bukkit.jar"
   if [ ! -f $file ]; then
-    url=$(curl -g -s "https://api.modrinth.com/v2/project/9eGKb6K1/version?game_versions=[%22$minecraftVersion%22]&loaders=[%22paper%22]" | jq -r '.[0].files[0].url')
+    url="https://cdn.modrinth.com/data/9eGKb6K1/versions/tfqjss5m/voicechat-bukkit-2.5.36.jar"
 
     echo -e -n "${yellow}Downloading voicechat from ${clear}$url${yellow}..."
     curl -s -o $file $url
