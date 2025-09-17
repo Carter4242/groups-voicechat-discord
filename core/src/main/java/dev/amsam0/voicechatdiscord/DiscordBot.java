@@ -740,7 +740,7 @@ public final class DiscordBot {
             }
         }
 
-        platform.info("[DiscordBot] User " + (joined ? "joined" : "left") + " Discord VC: " + username + " (ID: " + discordUserId + ", vcid=" + channelId + ")");
+        platform.debug("[DiscordBot] User " + (joined ? "joined" : "left") + " Discord VC: " + username + " (ID: " + discordUserId + ", vcid=" + channelId + ")");
 
         Long groupChannelId;
         if (joined) {
