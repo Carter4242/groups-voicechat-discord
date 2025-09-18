@@ -61,7 +61,7 @@ public final class SubCommands {
             if (groupId != null) break;
         }
         if (groupId == null) {
-            platform.sendMessage(sender, Component.red("You are not in a voicechat group."));
+            platform.sendMessage(sender, Component.red("You are not in a voicechat group linked to Discord VC."));
             return;
         }
 
@@ -113,7 +113,7 @@ public final class SubCommands {
             if (groupId != null) break;
         }
         if (groupId == null) {
-            platform.sendMessage(sender, Component.red("You are not in a voicechat group."));
+            platform.sendMessage(sender, Component.red("You are not in a voicechat group linked to Discord VC."));
             return;
         }
 
@@ -174,7 +174,7 @@ public final class SubCommands {
             if (groupId != null) break;
         }
         if (groupId == null) {
-            platform.sendMessage(sender, Component.red("You are not in a voicechat group."));
+            platform.sendMessage(sender, Component.red("You are not in a voicechat group linked to Discord VC."));
             return;
         }
 
