@@ -785,9 +785,11 @@ public final class DiscordBot {
             String categoryId = toBase26CategoryId(discordUserId);
             if (!discordUserCategoryMap.containsKey(discordUserId)) {
                 // Truncate username to 16 characters to fit VoiceChat's limit, add "..." if truncated
+                // Setting to 15 since we sometimes still get to long names?
+                // TODO: find out why ("Æ12341112345678901") causes it I think (special chars?)
                 String truncatedName;
-                if (username.length() > 16) {
-                    truncatedName = username.substring(0, 13) + "...";
+                if (username.length() > 15) {
+                    truncatedName = username.substring(0, 12) + "...";
                 } else {
                     truncatedName = username;
                 }
