@@ -11,7 +11,8 @@ object Properties {
     /* Paper */
     const val paperApiVersion = "1.19"
     val paperSupportedMinecraftVersions = listOf(
-        "1.21.7"
+        "1.21.7",
+        "1.21.8"
     )
     val paperDevBundleVersion = "${paperSupportedMinecraftVersions.last()}-R0.1-SNAPSHOT"
 
