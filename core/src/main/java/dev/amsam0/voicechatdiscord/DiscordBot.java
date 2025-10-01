@@ -5,6 +5,7 @@ import de.maxhenkel.voicechat.api.packets.StaticSoundPacket;
 import de.maxhenkel.voicechat.api.packets.ConvertablePacket;
 
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static dev.amsam0.voicechatdiscord.Core.platform;
 
@@ -818,8 +819,8 @@ public final class DiscordBot {
                         if (staticChannel != null) {
                             staticChannel.setCategory(categoryId);
                             GroupManager.groupAudioChannels
-                                .computeIfAbsent(foundGroupId, k -> new java.util.HashMap<>())
-                                .computeIfAbsent(playerId, k -> new java.util.HashMap<>())
+                                .computeIfAbsent(foundGroupId, k -> new ConcurrentHashMap<>())
+                                .computeIfAbsent(playerId, k -> new ConcurrentHashMap<>())
                                 .put(discordUserId, staticChannel);
                             platform.debug("Created StaticAudioChannel for Discord user '" + username + "' and player " + playerId + " in group " + foundGroupId + " with category " + categoryId);
                         } else {

@@ -10,6 +10,7 @@ import de.maxhenkel.voicechat.api.events.RemoveGroupEvent;
 import de.maxhenkel.voicechat.api.audiochannel.StaticAudioChannel;
 
 import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -28,19 +29,19 @@ public final class GroupManager {
     public static final Map<Long, String> discordUserNameMap = new ConcurrentHashMap<>();
 
     // Map groupId -> List of players
-    public static final Map<UUID, List<ServerPlayer>> groupPlayerMap = new HashMap<>();
+    public static final Map<UUID, List<ServerPlayer>> groupPlayerMap = new ConcurrentHashMap<>();
     // Map groupId -> owner UUID
-    public static final Map<UUID, UUID> groupOwnerMap = new HashMap<>();
+    public static final Map<UUID, UUID> groupOwnerMap = new ConcurrentHashMap<>();
     // Queue join events for groups whose Discord channel is still being created
     public static final Map<UUID, List<JoinGroupEvent>> pendingJoinEvents = new HashMap<>();
 
     // Map groupId -> (player UUID -> (Discord user ID -> StaticAudioChannel))
-    public static final Map<UUID, Map<UUID, Map<Long, StaticAudioChannel>>> groupAudioChannels = new HashMap<>();
+    public static final Map<UUID, Map<UUID, Map<Long, StaticAudioChannel>>> groupAudioChannels = new ConcurrentHashMap<>();
 
     // Map groupId -> DiscordBot
-    public static final Map<UUID, DiscordBot> groupBotMap = new HashMap<>();
+    public static final Map<UUID, DiscordBot> groupBotMap = new ConcurrentHashMap<>();
     // Track groups pending Discord channel creation
-    public static final Map<UUID, DiscordBot> pendingGroupCreations = new HashMap<>();
+    public static final Map<UUID, DiscordBot> pendingGroupCreations = new ConcurrentHashMap<>();
     // Track groups removed before channel creation completes
     public static final Set<UUID> removedBeforeCreation = new HashSet<>();
 
@@ -73,7 +74,7 @@ public final class GroupManager {
     }
 
     private static List<ServerPlayer> getPlayers(Group group) {
-        List<ServerPlayer> players = groupPlayerMap.putIfAbsent(group.getId(), new ArrayList<>());
+        List<ServerPlayer> players = groupPlayerMap.putIfAbsent(group.getId(), new CopyOnWriteArrayList<>());
         if (players == null) players = groupPlayerMap.get(group.getId());
         return players;
     }
@@ -99,8 +100,8 @@ public final class GroupManager {
                                     staticChannel.setCategory(categoryId);
                                 }
                                 groupAudioChannels
-                                    .computeIfAbsent(group.getId(), k -> new HashMap<>())
-                                    .computeIfAbsent(playerId, k -> new HashMap<>())
+                                    .computeIfAbsent(group.getId(), k -> new ConcurrentHashMap<>())
+                                    .computeIfAbsent(playerId, k -> new ConcurrentHashMap<>())
                                     .put(discordUserId, staticChannel);
                                 platform.debug("Created StaticAudioChannel for Discord user '" + username + "' (ID: " + discordUserId + ") and player " + playerId + " in group " + group.getId());
                             } else {
