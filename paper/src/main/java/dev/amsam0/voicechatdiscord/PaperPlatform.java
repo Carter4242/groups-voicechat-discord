@@ -6,6 +6,8 @@ import com.mojang.brigadier.context.CommandContext;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.Location;
+import org.bukkit.Sound;
 
 import static dev.amsam0.voicechatdiscord.PaperPlugin.LOGGER;
 import static dev.amsam0.voicechatdiscord.Core.api;
@@ -130,5 +132,57 @@ public class PaperPlatform implements Platform {
     @Override
     public void error(String message, Throwable throwable) {
         LOGGER.error(message, throwable);
+    }
+
+    @Override
+    public void teleportPlayer(de.maxhenkel.voicechat.api.Player player, PlayerPosition position) {
+        var bukkitPlayer = (Player) player.getPlayer();
+        if (bukkitPlayer != null) {
+            var targetWorld = PaperPlugin.get().getServer().getWorld(position.getWorldName());
+            if (targetWorld == null) {
+                LOGGER.warn("World " + position.getWorldName() + " not found, cannot teleport player");
+                return;
+            }
+
+            var targetLoc = new Location(
+                targetWorld,
+                position.getX(),
+                position.getY(),
+                position.getZ(),
+                position.getYaw(),
+                position.getPitch()
+            );
+
+            PaperPlugin.get().getServer().getScheduler().runTask(PaperPlugin.get(), () -> {
+                bukkitPlayer.teleport(targetLoc);
+            });
+        }
+    }
+
+    @Override
+    public PlayerPosition getPlayerPosition(de.maxhenkel.voicechat.api.Player player) {
+        var bukkitPlayer = (Player) player.getPlayer();
+        if (bukkitPlayer != null) {
+            var loc = bukkitPlayer.getLocation();
+            return new PlayerPosition(
+                loc.getX(),
+                loc.getY(),
+                loc.getZ(),
+                loc.getYaw(),
+                loc.getPitch(),
+                loc.getWorld().getName()
+            );
+        }
+        return null;
+    }
+
+    @Override
+    public void playPopSound(de.maxhenkel.voicechat.api.Player player) {
+        var bukkitPlayer = (Player) player.getPlayer();
+        if (bukkitPlayer != null) {
+            PaperPlugin.get().getServer().getScheduler().runTask(PaperPlugin.get(), () -> {
+                bukkitPlayer.playSound(bukkitPlayer.getLocation(), Sound.UI_HUD_BUBBLE_POP, 1.0f, 1.0f);
+            });
+        }
     }
 }

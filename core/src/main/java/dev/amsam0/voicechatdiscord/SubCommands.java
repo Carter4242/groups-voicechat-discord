@@ -4,10 +4,12 @@ import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import de.maxhenkel.voicechat.api.ServerPlayer;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.List;
 import static com.mojang.brigadier.builder.LiteralArgumentBuilder.literal;
 import static dev.amsam0.voicechatdiscord.Constants.RELOAD_CONFIG_PERMISSION;
 import static dev.amsam0.voicechatdiscord.Core.*;
@@ -36,6 +38,18 @@ public final class SubCommands {
         return builder
             .then(com.mojang.brigadier.builder.RequiredArgumentBuilder.<S, String>argument("message", StringArgumentType.greedyString())
                 .executes(wrapInTry(SubCommands::sendMessageToDiscord))
+            );
+    }
+
+    /**
+     * Standalone builder for /dvcutaway <delay_seconds> <return_seconds>
+     */
+    public static <S> LiteralArgumentBuilder<S> buildCutaway(LiteralArgumentBuilder<S> builder) {
+        return builder
+            .then(com.mojang.brigadier.builder.RequiredArgumentBuilder.<S, Integer>argument("delay_seconds", IntegerArgumentType.integer(0, 3600))
+                .then(com.mojang.brigadier.builder.RequiredArgumentBuilder.<S, Integer>argument("return_seconds", IntegerArgumentType.integer(1, 3600))
+                    .executes(wrapInTry(SubCommands::cutaway))
+                )
             );
     }
 
@@ -254,5 +268,79 @@ public final class SubCommands {
                     Component.green("Successfully reloaded config! Using " + bots.size() + " bot" + (bots.size() != 1 ? "s" : "") + ".")
             );
         }, "voicechat-discord: Reload Config").start();
+    }
+
+    /**
+     * /cutaway <delay_seconds> <return_seconds>
+     * OP-only command that teleports everyone in the group to the command sender's location,
+     * waits for delay_seconds, then teleports everyone back to their original positions.
+     * Then waits return_seconds and teleports everyone back to where they are now.
+     */
+    private static void cutaway(CommandContext<?> sender) {
+        ServerPlayer player = platform.commandContextToPlayer(sender);
+        if (player == null) {
+            platform.sendMessage(sender, Component.red("Could not determine your player. Are you running this from console?"));
+            return;
+        }
+
+        // Check if sender is operator
+        if (!platform.isOperator(sender)) {
+            return;
+        }
+
+        // Find the groupId the player is in
+        UUID groupId = null;
+        for (var entry : GroupManager.groupPlayerMap.entrySet()) {
+            for (var p : entry.getValue()) {
+                if (p.getUuid().equals(player.getUuid())) {
+                    groupId = entry.getKey();
+                    break;
+                }
+            }
+            if (groupId != null) break;
+        }
+
+        if (groupId == null) {
+            platform.sendMessage(sender, Component.red("You must be in a tracked voicechat group to use this command!"));
+            return;
+        }
+
+        int delaySeconds = IntegerArgumentType.getInteger(sender, "delay_seconds");
+        int returnSeconds = IntegerArgumentType.getInteger(sender, "return_seconds");
+
+        // Get sender's current position
+        PlayerPosition targetPos = platform.getPlayerPosition(player);
+        if (targetPos == null) {
+            platform.sendMessage(sender, Component.red("Could not get your position!"));
+            return;
+        }
+
+        UUID finalGroupId = groupId;
+        UUID initiatorUuid = player.getUuid();
+        // Schedule the cutaway
+        new Thread(() -> {
+            try {
+                // Wait for delay
+                Thread.sleep(delaySeconds * 1000L);
+
+                // Teleport all players to sender's location and get session ID
+                String sessionId = CutawayManager.startCutaway(finalGroupId, targetPos, initiatorUuid);
+                
+                // Wait for return delay
+                Thread.sleep(returnSeconds * 1000L);
+
+                // Teleport players back to original positions
+                if (sessionId != null) {
+                    CutawayManager.endCutaway(sessionId, initiatorUuid);
+                }
+            } catch (InterruptedException e) {
+                platform.error("Cutaway command interrupted", e);
+                Thread.currentThread().interrupt();
+            } catch (Throwable e) {
+                platform.error("Error during cutaway command execution", e);
+            }
+        }, "voicechat-discord: Cutaway").start();
+
+        platform.sendMessage(sender, Component.green("Cutaway command initiated! Teleporting in ").append(Component.aqua(String.valueOf(delaySeconds))).append(Component.green(" second(s).")));
     }
 }

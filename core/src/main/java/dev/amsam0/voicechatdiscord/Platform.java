@@ -34,6 +34,12 @@ public interface Platform {
 
     void sendActionBar(Player player, Component... message);
 
+    void teleportPlayer(Player player, PlayerPosition position);
+
+    PlayerPosition getPlayerPosition(Player player);
+
+    void playPopSound(Player player);
+
     default void debug(String message) {
         if (debugLevel >= 1) info("[DEBUG 1] " + message);
     }
