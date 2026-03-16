@@ -28,7 +28,7 @@ jobs:
     #  image: ${{ matrix.container }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Pre-package installation
         if: ${{ matrix.pre-install }}
@@ -39,8 +39,9 @@ jobs:
         run: ${{ matrix.install }}
 
       - name: Install rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: stable
           targets: ${{ matrix.arch }}-${{ matrix.triple }}
 
       - name: Build ${{ matrix.arch }}-${{ matrix.triple }}
@@ -48,7 +49,7 @@ jobs:
         working-directory: core
 
       - name: Upload ${{ matrix.filename }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: natives-${{ matrix.arch }}-${{ matrix.triple }}
           path: core/target/${{ matrix.arch }}-${{ matrix.triple }}/debug/${{ matrix.filename }}
@@ -66,25 +67,25 @@ jobs:
     needs: [natives]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Download linux-x64
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: natives-x86_64-unknown-linux-gnu
           path: core/src/main/resources/natives/linux-x64/
 
       - name: Download windows-x64
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: natives-x86_64-pc-windows-gnu
           path: core/src/main/resources/natives/windows-x64/
 
       - name: Validate gradle wrapper
-        uses: gradle/actions/wrapper-validation@v3
+        uses: gradle/actions/wrapper-validation@v5
 
       - name: Setup JDK ${{ matrix.java }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: ${{ matrix.java }}
           distribution: adopt
@@ -104,7 +105,7 @@ jobs:
         working-directory: ./paper
 
       - name: Upload paper artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: voicechat-discord-paper-nightly.jar
           path: paper/build/libs/voicechat-discord-paper-${{ steps.version.outputs.version }}.jar
