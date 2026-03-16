@@ -59,7 +59,7 @@ dependencies {
     compileOnly("com.github.zafarkhaja:java-semver:${Properties.javaSemverVersion}")
     compileOnly("com.google.code.gson:gson:${Properties.gsonVersion}")
     compileOnly("com.mojang:brigadier:1.0.18")
-    compileOnly("org.jetbrains:annotations:26.0.2")
+    compileOnly("org.jetbrains:annotations:26.1.0")
 }
 
 repositories {

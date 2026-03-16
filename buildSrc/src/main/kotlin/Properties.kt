@@ -18,7 +18,7 @@ object Properties {
 
     /* Dependencies */
     const val voicechatApiVersion = "2.4.11"
-    const val yamlConfigurationVersion = "2.0.2"
+    const val yamlConfigurationVersion = "3.0.4"
     const val javaSemverVersion = "0.10.2"
-    const val gsonVersion = "2.10.1"
+    const val gsonVersion = "2.13.2"
 }
