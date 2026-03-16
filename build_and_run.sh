@@ -1,5 +1,6 @@
 # Build Rust native library
 cd core/src/main/rust
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
 cargo build || { echo "cargo build failed. Press enter to continue..."; read; }
 cd -
 
