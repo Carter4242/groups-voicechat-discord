@@ -9,5 +9,5 @@ repositories {
 
 dependencies {
     implementation("com.modrinth.minotaur:com.modrinth.minotaur.gradle.plugin:2.+")
-    implementation("com.github.johnrengelman.shadow:com.github.johnrengelman.shadow.gradle.plugin:8.1.1")
+    implementation("com.gradleup.shadow:com.gradleup.shadow.gradle.plugin:8.3.10")
 }

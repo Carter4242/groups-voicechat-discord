@@ -1,5 +1,5 @@
 plugins {
     java
     id("com.modrinth.minotaur")
-    id("com.github.johnrengelman.shadow")
+    id("com.gradleup.shadow")
 }
