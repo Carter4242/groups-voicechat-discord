@@ -19,6 +19,7 @@ public class Post_1_20_6_CommandHelper implements CommandHelper {
             commands.register(SubCommands.build(Commands.literal("dvcgroup")).build());
             commands.register(SubCommands.buildMsg(Commands.literal("dvcgroupmsg")).build());
             commands.register(SubCommands.buildMsg(Commands.literal("grm")).build());
+            commands.register(SubCommands.buildCutaway(Commands.literal("cutaway")).requires(ctx -> ((CommandSourceStack) ctx).getSender().isOp()).build());
         });
     }
 
