@@ -22,6 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import static dev.amsam0.voicechatdiscord.Core.platform;
 
 public final class GroupManager {
+    private static final Object permanentGroupInitLock = new Object();
+    private static volatile UUID permanentGroupId = null;
 
     // Discord userId -> current channelId
     public static final Map<Long, Long> discordUserChannelMap = new ConcurrentHashMap<>();
@@ -57,17 +59,7 @@ public final class GroupManager {
             @Override
             public void run() {
                 for (UUID groupId : groupBotMap.keySet()) {
-                    DiscordBot bot = groupBotMap.get(groupId);
-                    if (bot != null) {
-                        List<ServerPlayer> players = groupPlayerMap.get(groupId);
-                        int playerCount = (players != null) ? players.size() : 0;
-                        Integer lastCount = lastPlayerCounts.get(groupId);
-                        if (playerCount > 0 && (lastCount == null || lastCount != playerCount)) {
-                            String groupName = Core.api.getGroup(groupId).getName();
-                            bot.updateDiscordVoiceChannelNameAsync(playerCount, groupName);
-                            lastPlayerCounts.put(groupId, playerCount);
-                        }
-                    }
+                    updateDiscordChannelNameIfNeeded(groupId);
                 }
             }
         }, 0, VC_UPDATE_INTERVAL_MS);
@@ -77,6 +69,228 @@ public final class GroupManager {
         List<ServerPlayer> players = groupPlayerMap.putIfAbsent(group.getId(), new CopyOnWriteArrayList<>());
         if (players == null) players = groupPlayerMap.get(group.getId());
         return players;
+    }
+
+    public static boolean isPermanentGroup(UUID groupId) {
+        return groupId != null && groupId.equals(permanentGroupId);
+    }
+
+    private static boolean isConfiguredPermanentGroup(Group group) {
+        return group != null
+            && Core.permanentMcGroupName.equals(group.getName())
+            && !group.hasPassword()
+            && group.isPersistent()
+            && group.getType() == Group.Type.OPEN;
+    }
+
+    private static String getDiscordChannelBaseName(UUID groupId, String fallbackName) {
+        return isPermanentGroup(groupId) ? Core.permanentDiscordChannelName : fallbackName;
+    }
+
+    private static DiscordBot findAvailableBot() {
+        for (DiscordBot candidate : Core.bots) {
+            if (!candidate.isStarted() && !groupBotMap.containsValue(candidate) && !pendingGroupCreations.containsValue(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    public static UUID getGroupIdForBot(DiscordBot bot) {
+        if (bot == null) return null;
+        for (var entry : groupBotMap.entrySet()) {
+            if (entry.getValue() == bot) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+
+    public static void updateDiscordChannelNameIfNeeded(UUID groupId) {
+        if (Core.api == null || groupId == null) return;
+        DiscordBot bot = groupBotMap.get(groupId);
+        if (bot == null) return;
+
+        List<ServerPlayer> players = groupPlayerMap.get(groupId);
+        int playerCount = (players != null) ? players.size() : 0;
+        boolean permanent = isPermanentGroup(groupId);
+        if (!permanent && playerCount <= 0) return;
+        Integer lastCount = lastPlayerCounts.get(groupId);
+        if (lastCount != null && lastCount == playerCount) return;
+
+        String baseName;
+        if (permanent) {
+            baseName = Core.permanentDiscordChannelName;
+        } else {
+            Group group = Core.api.getGroup(groupId);
+            if (group == null) return;
+            try {
+                baseName = group.getName();
+            } catch (Throwable t) {
+                platform.debug("Skipping Discord channel rename for group " + groupId + ": failed to read group name", t);
+                return;
+            }
+        }
+
+        bot.updateDiscordVoiceChannelNameAsync(playerCount, baseName);
+        lastPlayerCounts.put(groupId, playerCount);
+    }
+
+    public static void updatePermanentChannelNameForShutdown(DiscordBot bot) {
+        if (bot == null) return;
+        UUID groupId = getGroupIdForBot(bot);
+        if (!isPermanentGroup(groupId)) return;
+        bot.updateDiscordVoiceChannelNameAsync(0, Core.permanentDiscordChannelName);
+        lastPlayerCounts.put(groupId, 0);
+    }
+
+    private static void syncPermanentGroupVoiceConnection(UUID groupId) {
+        if (!isPermanentGroup(groupId)) return;
+
+        DiscordBot bot = groupBotMap.get(groupId);
+        if (bot == null) return;
+
+        new Thread(() -> {
+            List<ServerPlayer> players = groupPlayerMap.get(groupId);
+            int playerCount = (players != null) ? players.size() : 0;
+
+            synchronized (bot) {
+                if (playerCount > 0) {
+                    if (!bot.isStarted()) {
+                        platform.debug("Permanent group has its first player; connecting bot to Discord VC.");
+                        bot.start();
+                        bot.startDiscordAudioThread(groupId);
+                    }
+                } else {
+                    if (bot.isStarted()) {
+                        platform.debug("Permanent group has no players; disconnecting bot from Discord VC.");
+                        bot.disconnect();
+                        bot.stop(false);
+                    }
+                }
+            }
+        }, "voicechat-discord: Permanent Group Voice Sync").start();
+    }
+
+    private static void processQueuedJoinEvents(UUID groupId, Group group) {
+        List<JoinGroupEvent> queued;
+        synchronized (pendingJoinEvents) {
+            queued = pendingJoinEvents.remove(groupId);
+        }
+        if (queued == null) return;
+
+        platform.debug("Processing " + queued.size() + " queued join events for group " + groupId + " (" + group.getName() + ")");
+        for (JoinGroupEvent joinEvent : queued) {
+            onJoinGroup(joinEvent);
+        }
+    }
+
+    private static void startPermanentGroupBridge(Group group) {
+        UUID groupId = group.getId();
+        synchronized (permanentGroupInitLock) {
+            if (groupBotMap.containsKey(groupId) || pendingGroupCreations.containsKey(groupId)) {
+                return;
+            }
+            DiscordBot bot = findAvailableBot();
+            if (bot == null) {
+                platform.warn("No available Discord bots to assign to permanent group " + group.getName() + " (" + groupId + ")");
+                return;
+            }
+            pendingGroupCreations.put(groupId, bot);
+            new Thread(() -> {
+                if (bot.logIn()) {
+                    long permanentChannelId = Core.permanentDiscordChannelId;
+                    if (permanentChannelId <= 0L) {
+                        platform.error("Cannot start permanent group bridge: permanent_discord_channel_id is invalid (" + permanentChannelId + ")");
+                        pendingGroupCreations.remove(groupId);
+                        bot.stop(false);
+                        return;
+                    }
+                    bot.setManagedDiscordVoiceChannel(permanentChannelId);
+                    bot.start();
+
+                    pendingGroupCreations.remove(groupId);
+                    synchronized (removedBeforeCreation) {
+                        if (removedBeforeCreation.contains(groupId)) {
+                            platform.debug("Permanent group " + groupId + " was removed before startup finished.");
+                            removedBeforeCreation.remove(groupId);
+                            bot.disconnect();
+                            bot.stop(false);
+                            return;
+                        }
+                    }
+
+                    groupPlayerMap.putIfAbsent(groupId, new CopyOnWriteArrayList<>());
+                    groupBotMap.put(groupId, bot);
+                    platform.info("Linked permanent group " + group.getName() + " (" + groupId + ") to Discord channel " + Core.permanentDiscordChannelId + "; bot will join voice when players are in the group.");
+                    processQueuedJoinEvents(groupId, group);
+                    syncPermanentGroupVoiceConnection(groupId);
+                } else {
+                    platform.error("Failed to login to Discord for permanent group " + group.getName() + " (" + groupId + ")");
+                    pendingGroupCreations.remove(groupId);
+                }
+            }, "voicechat-discord: Permanent Group Bot Start").start();
+        }
+    }
+
+    public static void ensurePermanentGroup() {
+        if (Core.api == null) {
+            platform.debug("Skipping permanent group initialization: VoiceChat API not ready yet.");
+            return;
+        }
+
+        Group permanentGroup = null;
+        Group wrongTypeGroup = null;
+        for (Group group : Core.api.getGroups()) {
+            if (Core.permanentMcGroupName.equals(group.getName())) {
+                if (isConfiguredPermanentGroup(group)) {
+                    permanentGroup = group;
+                    break;
+                }
+                wrongTypeGroup = group;
+            }
+        }
+
+        if (permanentGroup == null && wrongTypeGroup != null) {
+            platform.warn("Found group named '" + Core.permanentMcGroupName + "' but it is not OPEN+persistent+no-password. Creating the required permanent group.");
+        }
+
+        if (permanentGroup == null) {
+            try {
+                permanentGroup = Core.api.groupBuilder()
+                    .setName(Core.permanentMcGroupName)
+                    .setPassword(null)
+                    .setPersistent(true)
+                    .setType(Group.Type.OPEN)
+                    .build();
+                platform.info("Created permanent voicechat group '" + Core.permanentMcGroupName + "' (" + permanentGroup.getId() + ")");
+            } catch (Throwable t) {
+                platform.error("Failed to create permanent voicechat group '" + Core.permanentMcGroupName + "'", t);
+                return;
+            }
+        }
+
+        permanentGroupId = permanentGroup.getId();
+        groupPlayerMap.putIfAbsent(permanentGroupId, new CopyOnWriteArrayList<>());
+        startPermanentGroupBridge(permanentGroup);
+    }
+
+    public static void clearTrackedState() {
+        discordUserChannelMap.clear();
+        discordUserNameMap.clear();
+        groupPlayerMap.clear();
+        groupOwnerMap.clear();
+        synchronized (pendingJoinEvents) {
+            pendingJoinEvents.clear();
+        }
+        groupAudioChannels.clear();
+        groupBotMap.clear();
+        pendingGroupCreations.clear();
+        synchronized (removedBeforeCreation) {
+            removedBeforeCreation.clear();
+        }
+        lastPlayerCounts.clear();
+        permanentGroupId = null;
     }
 
     private static void handlePlayerJoin(Group group, ServerPlayer player, VoicechatConnection connection, DiscordBot bot, int playerCount) {
@@ -166,6 +380,7 @@ public final class GroupManager {
             platform.debug(player.getUuid() + " (" + platform.getName(player) + ") joined " + group.getId() + " (" + group.getName() + ")");
             players.add(player);
             handlePlayerJoin(group, player, event.getConnection(), bot, players.size());
+            syncPermanentGroupVoiceConnection(groupId);
         } else {
             platform.debug(player.getUuid() + " (" + platform.getName(player) + ") already joined " + group.getId() + " (" + group.getName() + ")");
         }
@@ -217,6 +432,13 @@ public final class GroupManager {
         Group group = event.getGroup();
         UUID groupId = group.getId();
 
+        if (isConfiguredPermanentGroup(group)) {
+            permanentGroupId = groupId;
+            groupPlayerMap.putIfAbsent(groupId, new CopyOnWriteArrayList<>());
+            startPermanentGroupBridge(group);
+            return;
+        }
+
         if (group.hasPassword()) {
             platform.info("Not adding group " + group.getName() + " (" + groupId + ") to Discord: group has a password.");
             return;
@@ -233,13 +455,7 @@ public final class GroupManager {
         groupOwnerMap.put(groupId, player.getUuid());
 
         if (!Core.bots.isEmpty()) {
-            DiscordBot found = null;
-            for (DiscordBot candidate : Core.bots) {
-                if (!candidate.isStarted() && !groupBotMap.containsValue(candidate) && !pendingGroupCreations.containsValue(candidate)) {
-                    found = candidate;
-                    break;
-                }
-            }
+            DiscordBot found = findAvailableBot();
             if (found == null) {
                 platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")! All bots are started or already assigned.\n" +
                     "Bot status: " + Core.bots.stream().map(b -> "started=" + b.isStarted() + ", assigned=" + groupBotMap.containsValue(b)).toList());
@@ -283,19 +499,7 @@ public final class GroupManager {
                         List<ServerPlayer> players = getPlayers(group);
                         players.add(player);
                         handlePlayerJoin(group, player, connection, bot, players.size());
-
-                        // Process any queued join events for this group
-                        List<JoinGroupEvent> queued;
-                        synchronized (pendingJoinEvents) {
-                            queued = pendingJoinEvents.remove(groupId);
-                        }
-                        if (queued != null) {
-                            platform.debug("Processing " + queued.size() + " queued join events for group " + groupId + " (" + group.getName() + ")");
-                            for (JoinGroupEvent joinEvent : queued) {
-                                // Re-dispatch the join event for normal handling
-                                onJoinGroup(joinEvent);
-                            }
-                        }
+                        processQueuedJoinEvents(groupId, group);
                     });
                 } else {
                     platform.error("Failed to login to Discord for group " + group.getName() + " (" + groupId + ")");
@@ -317,6 +521,7 @@ public final class GroupManager {
     public static void onGroupRemoved(RemoveGroupEvent event) {
         Group group = event.getGroup();
         UUID groupId = group.getId();
+        boolean permanent = isPermanentGroup(groupId);
 
         platform.debug("onGroupRemoved: Group removed: " + groupId + ", " + group.getName() + ")");
 
@@ -325,7 +530,11 @@ public final class GroupManager {
             synchronized (removedBeforeCreation) {
                 removedBeforeCreation.add(groupId);
             }
-            platform.debug("onGroupRemoved: Group " + groupId + " is pending Discord channel creation. Will delete after creation.");
+            if (permanent) {
+                platform.debug("onGroupRemoved: Permanent group " + groupId + " is pending startup bridge creation. It will be stopped without deleting its Discord channel.");
+            } else {
+                platform.debug("onGroupRemoved: Group " + groupId + " is pending Discord channel creation. Will delete after creation.");
+            }
         }
 
         // Clean up all Discord users in the group's VC as if they left
@@ -359,13 +568,29 @@ public final class GroupManager {
         bot = groupBotMap.remove(groupId);
         if (bot != null) {
             platform.debug("onGroupRemoved: Stopping Discord bot for group: " + group.getName() + ")");
-            bot.stop();
+            if (permanent) {
+                DiscordBot permanentBot = bot;
+                new Thread(() -> {
+                    try {
+                        permanentBot.disconnect();
+                        permanentBot.stop(false);
+                    } catch (Throwable t) {
+                        platform.error("onGroupRemoved: Failed to stop permanent Discord bot for group: " + group.getName() + " (" + groupId + ")", t);
+                    }
+                }, "voicechat-discord: Permanent Group Remove Stop").start();
+            } else {
+                bot.stop();
+            }
             platform.debug("onGroupRemoved: Stopped Discord bot for group: " + group.getName() + ")");
         }
 
         groupAudioChannels.remove(groupId);
         groupPlayerMap.remove(groupId);
         groupOwnerMap.remove(groupId);
+        lastPlayerCounts.remove(groupId);
+        if (permanent) {
+            permanentGroupId = null;
+        }
     }
 
     private static void removePlayerFromGroup(UUID groupId, UUID playerUuid, String playerName) {
@@ -387,6 +612,8 @@ public final class GroupManager {
                 bot.sendDiscordTextMessageAsync(leaveMsg, true);
             }
         }
+
+        syncPermanentGroupVoiceConnection(groupId);
     }
 
     public static void handleMinecraftPlayerLeave(UUID playerUuid) {

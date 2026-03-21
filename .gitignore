@@ -8,3 +8,5 @@ config.yml
 core/bin/*
 paper/bin/*
 .vscode
+.gradle-user
+simple-voice-chat

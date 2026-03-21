@@ -11,6 +11,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 
 /**
@@ -26,6 +27,9 @@ public final class Core {
 
     public static ArrayList<DiscordBot> bots = new ArrayList<>();
     public static int debugLevel = 0;
+    public static long permanentDiscordChannelId = 0;
+    public static String permanentDiscordChannelName = "MC General";
+    public static String permanentMcGroupName = "General";
 
     private static native void initializeNatives();
 
@@ -64,7 +68,6 @@ public final class Core {
 
     @SuppressWarnings({"DataFlowIssue", "ResultOfMethodCallIgnored"})
     public static void loadConfig() {
-
         File configFile = new File(platform.getConfigPath());
         if (!configFile.getParentFile().exists())
             configFile.getParentFile().mkdirs();
@@ -84,6 +87,12 @@ public final class Core {
                 "# Add each bot user ID on its own line, starting with a dash.",
                 "bot_user_ids:",
                 "  - DISCORD_BOT_USER_ID_HERE",
+                "",
+                "# Permanent Discord VC bridge settings.",
+                "# This channel is reused on every server start and never deleted by the plugin.",
+                "permanent_discord_channel_id: 0000000000000000000",
+                "permanent_discord_channel_name: MC General",
+                "permanent_mc_group_name: General",
                 "",
                 "# Debug logging level:",
                 "# 0 (or lower): No debug logging",
@@ -159,6 +168,51 @@ public final class Core {
 
         platform.info("Using " + bots.size() + " bot" + (bots.size() != 1 ? "s" : ""));
 
+        long loadedPermanentChannelId = permanentDiscordChannelId;
+        Object permanentChannelIdObj = config.get("permanent_discord_channel_id");
+        if (permanentChannelIdObj instanceof String s) {
+            try {
+                loadedPermanentChannelId = Long.parseLong(s.trim());
+            } catch (NumberFormatException e) {
+                platform.error("permanent_discord_channel_id must be a valid Discord channel ID (number as string). Using previous value " + permanentDiscordChannelId);
+            }
+        } else if (permanentChannelIdObj instanceof Number n) {
+            loadedPermanentChannelId = n.longValue();
+        } else if (permanentChannelIdObj != null) {
+            platform.error("permanent_discord_channel_id has an invalid type. Using previous value " + permanentDiscordChannelId);
+        }
+        if (loadedPermanentChannelId <= 0L) {
+            platform.error("permanent_discord_channel_id must be greater than 0. Using previous value " + permanentDiscordChannelId);
+        } else {
+            permanentDiscordChannelId = loadedPermanentChannelId;
+        }
+
+        Object permanentChannelNameObj = config.get("permanent_discord_channel_name");
+        if (permanentChannelNameObj instanceof String s) {
+            String trimmed = s.trim();
+            if (!trimmed.isEmpty()) {
+                permanentDiscordChannelName = trimmed;
+            } else {
+                platform.error("permanent_discord_channel_name cannot be empty. Using previous value '" + permanentDiscordChannelName + "'");
+            }
+        } else if (permanentChannelNameObj != null) {
+            platform.error("permanent_discord_channel_name must be a string. Using previous value '" + permanentDiscordChannelName + "'");
+        }
+
+        Object permanentMcGroupNameObj = config.get("permanent_mc_group_name");
+        if (permanentMcGroupNameObj instanceof String s) {
+            String trimmed = s.trim();
+            if (!trimmed.isEmpty()) {
+                permanentMcGroupName = trimmed;
+            } else {
+                platform.error("permanent_mc_group_name cannot be empty. Using previous value '" + permanentMcGroupName + "'");
+            }
+        } else if (permanentMcGroupNameObj != null) {
+            platform.error("permanent_mc_group_name must be a string. Using previous value '" + permanentMcGroupName + "'");
+        }
+
+        platform.info("Permanent bridge: group '" + permanentMcGroupName + "' <-> channel '" + permanentDiscordChannelName + "' (" + permanentDiscordChannelId + ")");
+
         try {
             debugLevel = (int) config.get("debug_level");
             if (debugLevel > 0) platform.info("Debug level has been set to " + debugLevel);
@@ -195,7 +249,15 @@ public final class Core {
         platform.info("Stopping all Discord bots...");
         bots.forEach(discordBot -> {
             platform.info("Stopping bot (vcId=" + discordBot.getDiscordChannelId() + ")...");
-            discordBot.stop();
+            UUID groupId = GroupManager.getGroupIdForBot(discordBot);
+            if (GroupManager.isPermanentGroup(groupId)) {
+                GroupManager.updatePermanentChannelNameForShutdown(discordBot);
+                discordBot.disconnect();
+                discordBot.stop(false);
+                platform.info("Stopped permanent group bot.");
+            } else {
+                discordBot.stop();
+            }
         });
         platform.info("Waiting for all delete threads to finish...");
         bots.forEach(discordBot -> {
@@ -209,10 +271,8 @@ public final class Core {
         });
         bots.clear();
 
-        platform.info("Clearing group player, bot, and audio channel maps...");
-        GroupManager.groupPlayerMap.clear();
-        GroupManager.groupBotMap.clear();
-        GroupManager.groupAudioChannels.clear();
+        platform.info("Clearing tracked Discord/group state maps...");
+        GroupManager.clearTrackedState();
         platform.info("All bots and group maps cleared.");
     }
 }

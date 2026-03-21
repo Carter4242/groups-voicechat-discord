@@ -289,6 +289,28 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1deleteDisco
     }
 }
 
+// JNI: Set a pre-existing Discord voice channel for this bot instance
+#[no_mangle]
+pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1setManagedDiscordVoiceChannel(
+    mut _env: JNIEnv<'_>,
+    _obj: jobject,
+    ptr: jlong,
+    channel_id: jlong,
+) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let discord_bot = unsafe { Arc::from_raw(ptr as *const super::DiscordBot) };
+        if channel_id > 0 {
+            *discord_bot.channel_id.lock() = Some(ChannelId::new(channel_id as u64));
+        } else {
+            *discord_bot.channel_id.lock() = None;
+        }
+        let _ = Arc::into_raw(discord_bot);
+    }));
+    if let Err(payload) = result {
+        log_jni_panic("DiscordBot__1setManagedDiscordVoiceChannel", ptr, &payload);
+    }
+}
+
 // JNI: Update Discord voice channel name for this bot instance
 #[no_mangle]
 pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1updateDiscordVoiceChannelName(

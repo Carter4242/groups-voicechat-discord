@@ -179,6 +179,29 @@ public final class DiscordBot {
     // Native methods for channel management
     private static native long _createDiscordVoiceChannel(long ptr, String groupName);
     private static native void _deleteDiscordVoiceChannel(long ptr);
+    private static native void _setManagedDiscordVoiceChannel(long ptr, long channelId);
+
+    /**
+     * Sets the managed Discord voice channel ID for this bot without creating/deleting a channel.
+     * Used for permanently managed channels that already exist on Discord.
+     */
+    public void setManagedDiscordVoiceChannel(long channelId) {
+        if (freed || ptr == 0) {
+            platform.warn("Attempted to set managed Discord channel after bot was freed or ptr was invalid");
+            return;
+        }
+        if (channelId <= 0) {
+            platform.warn("Attempted to set managed Discord channel to an invalid ID: " + channelId);
+            return;
+        }
+        try {
+            _setManagedDiscordVoiceChannel(ptr, channelId);
+            this.discordChannelId = channelId;
+            platform.debug("Set managed Discord voice channel to vcid=" + channelId);
+        } catch (Throwable t) {
+            platform.error("Failed to set managed Discord channel to vcid=" + channelId, t);
+        }
+    }
 
     /**
      * Asynchronously sends a text message to the Discord voice channel's text chat.

@@ -156,10 +156,16 @@ public final class SubCommands {
         }
 
         UUID finalGroupId = groupId;
+        boolean permanentGroup = GroupManager.isPermanentGroup(groupId);
         new Thread(() -> {
             try {
                 bot.disconnect();
-                bot.stop(); // Default: deletes the channel
+                if (permanentGroup) {
+                    bot.stop(false);
+                    GroupManager.updatePermanentChannelNameForShutdown(bot);
+                } else {
+                    bot.stop(); // Default: deletes the channel
+                }
                 platform.sendMessage(sender, Component.green("Successfully stopped the Discord bot for your group."));
             } catch (Throwable e) {
                 platform.error("Failed to stop Discord bot for group: " + finalGroupId, e);

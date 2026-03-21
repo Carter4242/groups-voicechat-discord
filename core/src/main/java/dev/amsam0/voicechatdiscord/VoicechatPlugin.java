@@ -28,6 +28,7 @@ public abstract class VoicechatPlugin implements de.maxhenkel.voicechat.api.Voic
 
     @Override
     public void registerEvents(EventRegistration registration) {
+        registration.registerEvent(VoicechatServerStartedEvent.class, event -> GroupManager.ensurePermanentGroup());
         registration.registerEvent(JoinGroupEvent.class, GroupManager::onJoinGroup);
         registration.registerEvent(LeaveGroupEvent.class, GroupManager::onLeaveGroup);
         registration.registerEvent(CreateGroupEvent.class, GroupManager::onGroupCreated);
