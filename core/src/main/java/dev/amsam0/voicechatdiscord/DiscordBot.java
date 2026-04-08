@@ -39,6 +39,7 @@ public final class DiscordBot {
 
     // Formats Discord emotes in a message to :name: for Minecraft display.
     private static final java.util.regex.Pattern EMOTE_PATTERN = java.util.regex.Pattern.compile("<a?:([A-Za-z0-9_]+):[0-9]+>");
+    private static final int VOICECHAT_CATEGORY_MAX_BYTES = 16;
 
 
     public Long getDiscordChannelId() {
@@ -698,6 +699,34 @@ public final class DiscordBot {
         return result;
     }
 
+    private static String truncateUtf8WithEllipsis(String input, int maxBytes) {
+        if (input == null || input.isEmpty()) return "unknown";
+        if (utf8Length(input) <= maxBytes) return input;
+        if (maxBytes <= 3) return truncateUtf8(input, maxBytes);
+        return truncateUtf8(input, maxBytes - 3) + "...";
+    }
+
+    private static String truncateUtf8(String input, int maxBytes) {
+        if (input == null || input.isEmpty() || maxBytes <= 0) return "";
+        StringBuilder out = new StringBuilder();
+        int i = 0;
+        int outBytes = 0;
+        while (i < input.length()) {
+            int codePoint = input.codePointAt(i);
+            String cp = new String(Character.toChars(codePoint));
+            int cpBytes = utf8Length(cp);
+            if (outBytes + cpBytes > maxBytes) break;
+            out.append(cp);
+            outBytes += cpBytes;
+            i += Character.charCount(codePoint);
+        }
+        return out.toString();
+    }
+
+    private static int utf8Length(String s) {
+        return s.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+    }
+
     /**
      * Called from Rust when a Discord user's voice state changes (join/leave VC).
      * @param discordUserId The Discord user ID (as a long)
@@ -808,15 +837,8 @@ public final class DiscordBot {
             // Use a base-26 (a-z) encoding for the category ID, max 16 chars
             String categoryId = toBase26CategoryId(discordUserId);
             if (!discordUserCategoryMap.containsKey(discordUserId)) {
-                // Truncate username to 16 characters to fit VoiceChat's limit, add "..." if truncated
-                // Setting to 15 since we sometimes still get to long names?
-                // TODO: find out why ("Æ12341112345678901") causes it I think (special chars?)
-                String truncatedName;
-                if (username.length() > 15) {
-                    truncatedName = username.substring(0, 12) + "...";
-                } else {
-                    truncatedName = username;
-                }
+                // VoiceChat enforces 16 UTF-8 bytes for category names.
+                String truncatedName = truncateUtf8WithEllipsis(username, VOICECHAT_CATEGORY_MAX_BYTES);
                 var icon = Core.loadDiscordIcon();
                 var category = Core.api.volumeCategoryBuilder()
                     .setId(categoryId)
