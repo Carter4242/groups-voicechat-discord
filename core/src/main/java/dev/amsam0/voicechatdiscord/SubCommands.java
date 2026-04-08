@@ -198,9 +198,11 @@ public final class SubCommands {
             return;
         }
 
-        // Check if sender is op or group owner
+        // Allow anyone in the permanent "mc general" group to restart.
+        // For all other groups, keep the existing op/group-owner gate.
+        boolean isPermanentGroup = GroupManager.isPermanentGroup(groupId);
         UUID owner = GroupManager.groupOwnerMap.get(groupId);
-        if (!platform.isOperator(sender) && (owner == null || !owner.equals(player.getUuid()))) {
+        if (!isPermanentGroup && !platform.isOperator(sender) && (owner == null || !owner.equals(player.getUuid()))) {
             platform.sendMessage(sender, Component.red("You must be the group owner to use this command!"));
             return;
         }
