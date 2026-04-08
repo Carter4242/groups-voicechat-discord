@@ -382,12 +382,8 @@ impl DiscordBot {
             info!("Bot is not started");
             return Ok(());
         };
-        info!("Stopping DiscordBot: transitioning from Started to LoggedIn, setting audio_shutdown to true");
-        self.audio_shutdown.store(true, Ordering::SeqCst);
-        // Remove audio source UUID from registry if present
-        if let Some(uuid) = self.get_audio_source_uuid() {
-            crate::discord_bot::discord_speak::remove_audio_source(&uuid);
-        }
+        info!("Stopping DiscordBot: transitioning from Started to LoggedIn with hard audio reset");
+        self.hard_reset_audio_state();
         *state_lock = match &*state_lock {
             State::Started { http, .. } => State::LoggedIn { http: http.clone() },
             _ => unreachable!(),
@@ -436,6 +432,17 @@ impl DiscordBot {
         let mut playout = buffer.playout_buffer.lock().unwrap();
         let stored = StoredPacket { opus: payload, decrypted: true, seq };
         playout.store_packet(stored);
+    }
+
+    /// Hard-reset in-memory audio state so restart can recover from stale/desynced buffers.
+    pub fn hard_reset_audio_state(&self) {
+        self.audio_shutdown.store(true, Ordering::SeqCst);
+        self.player_to_discord_buffers.clear();
+        self.discord_to_mc_buffer.received_audio_rx.drain();
+        if let Some(uuid) = self.get_audio_source_uuid() {
+            crate::discord_bot::discord_speak::remove_audio_source(&uuid);
+            *self.audio_source_uuid.lock().unwrap() = None;
+        }
     }
 }
 
