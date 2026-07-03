@@ -67,11 +67,19 @@ static WATCHDOG_STARTED: Once = Once::new();
 pub fn ensure_started() {
     WATCHDOG_STARTED.call_once(|| {
         crate::runtime::RUNTIME.spawn(async {
-            let mut last_count = RECEIVE_ERROR_COUNT.load(Ordering::Relaxed);
+            // Logged udp_rx errors PLUS frames songbird's DAVE layer dropped
+            // silently (session never ready / missing ratchet) - the latter is
+            // the "user talks, zero audio, zero log output" failure mode.
+            let total = || {
+                RECEIVE_ERROR_COUNT
+                    .load(Ordering::Relaxed)
+                    .wrapping_add(songbird::driver::DAVE_SILENT_DROPS.load(Ordering::Relaxed))
+            };
+            let mut last_count = total();
             let mut last_trigger: Option<Instant> = None;
             loop {
                 tokio::time::sleep(Duration::from_secs(CHECK_INTERVAL_SECS)).await;
-                let current = RECEIVE_ERROR_COUNT.load(Ordering::Relaxed);
+                let current = total();
                 let delta = current.saturating_sub(last_count);
                 last_count = current;
                 if delta < TRIGGER_THRESHOLD {

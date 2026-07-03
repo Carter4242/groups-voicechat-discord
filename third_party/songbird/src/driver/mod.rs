@@ -62,6 +62,12 @@ use core::{
 use flume::{r#async::RecvFut, SendError, Sender};
 /// Opus encoder bitrate settings.
 pub use opus2::{self as opus, Bitrate};
+
+/// PATCH(voicechat-discord): count of voice frames silently dropped because
+/// the DAVE E2EE session could not decrypt them (session not ready, missing
+/// decryptor/ratchet). These drops are intentionally unlogged upstream, so an
+/// external watchdog needs this counter to detect a wedged session.
+pub static DAVE_SILENT_DROPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 #[cfg(feature = "builtin-queue")]
 use std::time::Duration;
 #[allow(unused_imports)]

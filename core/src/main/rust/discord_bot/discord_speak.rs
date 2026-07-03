@@ -86,12 +86,12 @@ pub fn poke_all_audio_sources() {
 
 impl io::Read for PlayerAudioSource {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        tracing::info!(
+        tracing::trace!(
             "PlayerAudioSource::read: shutdown={}, buf_size={}, leftover_len={}",
             self.shutdown.load(Ordering::SeqCst), buf.len(), self.leftover.len()
         );
         if self.shutdown.load(Ordering::SeqCst) {
-            tracing::info!("PlayerAudioSource::read: returning early due to shutdown, bytes=0");
+            tracing::trace!("PlayerAudioSource::read: returning early due to shutdown, bytes=0");
             return Ok(0);
         }
 
@@ -104,7 +104,7 @@ impl io::Read for PlayerAudioSource {
             } else {
                 self.leftover.clear();
             }
-            tracing::info!("PlayerAudioSource::read: returning leftover bytes, bytes={}", to_copy);
+            tracing::trace!("PlayerAudioSource::read: returning leftover bytes, bytes={}", to_copy);
             return Ok(to_copy);
         }
 
@@ -144,7 +144,7 @@ impl io::Read for PlayerAudioSource {
 
         loop {
             if self.shutdown.load(Ordering::SeqCst) {
-                tracing::info!("PlayerAudioSource::read: returning early due to shutdown in loop, bytes=0");
+                tracing::trace!("PlayerAudioSource::read: returning early due to shutdown in loop, bytes=0");
                 return Ok(0);
             }
             if self.prev_zero {
@@ -241,12 +241,12 @@ impl io::Read for PlayerAudioSource {
                     self.silent_countdown -= 1;
                     let to_copy = std::cmp::min(buf.len(), temp.len());
                     buf[..to_copy].copy_from_slice(&temp[..to_copy]);
-                    tracing::info!("PlayerAudioSource::read: returning silent frame, bytes={}", to_copy);
+                    tracing::trace!("PlayerAudioSource::read: returning silent frame, bytes={}", to_copy);
                     return Ok(to_copy);
                 }
                 self.prev_zero = true;
                 std::thread::sleep(std::time::Duration::from_millis(2));
-                tracing::info!("PlayerAudioSource::read: restarting after failed frame, bytes=0");
+                tracing::trace!("PlayerAudioSource::read: restarting after failed frame, bytes=0");
                 continue;
             }
             // Log actual time since last frame sent
@@ -260,7 +260,7 @@ impl io::Read for PlayerAudioSource {
             } else {
                 self.leftover.clear();
             }
-            tracing::info!("PlayerAudioSource::read: returning with audio, bytes={}", to_copy);
+            tracing::trace!("PlayerAudioSource::read: returning with audio, bytes={}", to_copy);
             return Ok(to_copy);
         }
     }

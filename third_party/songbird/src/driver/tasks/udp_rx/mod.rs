@@ -211,14 +211,22 @@ impl UdpRx {
                         // Silently drop encrypted packets if it's not possible to decrypt them for
                         // one reason or another; otherwise there'd be error logs for trying to decode
                         // Opus
+                        //
+                        // PATCH(voicechat-discord): count these silent drops so an
+                        // external watchdog can detect a DAVE session that never
+                        // became ready / lost its ratchets (users are inaudible
+                        // with zero log output otherwise).
                         let Some(user_id) = self.ssrc_signalling.ssrc_user_map.get(&ssrc) else {
+                            crate::driver::DAVE_SILENT_DROPS.fetch_add(1, Ordering::Relaxed);
                             return;
                         };
                         let Some(ref mut dave_session) = *self.dave_session.write().unwrap() else {
+                            crate::driver::DAVE_SILENT_DROPS.fetch_add(1, Ordering::Relaxed);
                             return;
                         };
 
                         if !dave_session.is_ready() {
+                            crate::driver::DAVE_SILENT_DROPS.fetch_add(1, Ordering::Relaxed);
                             return;
                         }
 
@@ -240,6 +248,8 @@ impl UdpRx {
                                 },
                             )) => {
                                 // Silently drop encrypted packets for users whose ratchets are not configured yet.
+                                // PATCH(voicechat-discord): counted for the corruption watchdog.
+                                crate::driver::DAVE_SILENT_DROPS.fetch_add(1, Ordering::Relaxed);
                                 return;
                             },
                             Err(e) => {

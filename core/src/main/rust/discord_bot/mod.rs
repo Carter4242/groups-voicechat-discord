@@ -308,8 +308,12 @@ impl DiscordBot {
                 }
             };
             drop(state);
-            use serenity::builder::CreateMessage;
-            let msg = CreateMessage::new().content(message);
+            use serenity::builder::{CreateAllowedMentions, CreateMessage};
+            // Empty allowed_mentions: Minecraft chat is untrusted input, so
+            // "@everyone" etc. relayed from players must never actually ping.
+            let msg = CreateMessage::new()
+                .content(message)
+                .allowed_mentions(CreateAllowedMentions::new());
             let sent_message = channel_id.send_message(http.as_ref(), msg).await?;
             
             // Store the message content for efficient appending
@@ -361,8 +365,10 @@ impl DiscordBot {
                 new_content
             };
             
-            use serenity::builder::EditMessage;
-            let edit = EditMessage::new().content(new_content);
+            use serenity::builder::{CreateAllowedMentions, EditMessage};
+            let edit = EditMessage::new()
+                .content(new_content)
+                .allowed_mentions(CreateAllowedMentions::new());
             channel_id.edit_message(http.as_ref(), message_id, edit).await?;
             Ok(())
         }).catch_unwind().await;
@@ -463,19 +469,19 @@ impl DiscordBot {
         if payload.is_empty() {
             let buffer = self.player_to_discord_buffers.entry(player_id)
                 .or_insert_with(|| {
-                    tracing::info!("Creating new PlayerToDiscordBuffer for player_id={}", player_id);
+                    tracing::debug!("Creating new PlayerToDiscordBuffer for player_id={}", player_id);
                     PlayerToDiscordBuffer {
                         playout_buffer: StdMutex::new(PlayoutBuffer::new(8, seq)),
                     }
                 });
             let mut playout = buffer.playout_buffer.lock().unwrap();
             playout.force_drain();
-            tracing::info!("Received zero-length packet for player_id={}: forcing playout buffer to drain mode", player_id);
+            tracing::debug!("Received zero-length packet for player_id={}: forcing playout buffer to drain mode", player_id);
             return;
         }
         let buffer = self.player_to_discord_buffers.entry(player_id)
             .or_insert_with(|| {
-                tracing::info!("Creating new PlayerToDiscordBuffer for player_id={}", player_id);
+                tracing::debug!("Creating new PlayerToDiscordBuffer for player_id={}", player_id);
                 PlayerToDiscordBuffer {
                     playout_buffer: StdMutex::new(PlayoutBuffer::new(8, seq)),
                 }
