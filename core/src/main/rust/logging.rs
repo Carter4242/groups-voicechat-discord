@@ -83,6 +83,8 @@ pub fn ensure_init() {
     if tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_writer(file).with_ansi(false))
+        // Counts songbird udp_rx errors to detect corrupted voice receive sessions
+        .with(crate::discord_bot::watchdog::ReceiveErrorCountingLayer)
         .try_init()
         .is_err()
     {
@@ -116,8 +118,6 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_Core_setDebugLevel<'loca
             .modify(|filter| filter.set_max_level(Level::TRACE))
             .expect("failed to change logging level"),
     }
-    // Force set logging level to TRACE after any call
-    reload_handle
-        .modify(|filter| filter.set_max_level(Level::WARN))
-        .expect("failed to force logging level to TRACE");
+    // (A leftover block here used to force the level back to WARN after every
+    // call, which made the debug_level config option a no-op for the Rust log.)
 }

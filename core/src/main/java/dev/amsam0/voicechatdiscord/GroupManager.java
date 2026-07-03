@@ -48,7 +48,7 @@ public final class GroupManager {
     public static final Set<UUID> removedBeforeCreation = new HashSet<>();
 
     // Track last player count for each group to avoid unnecessary renames
-    private static final Map<UUID, Integer> lastPlayerCounts = new HashMap<>();
+    private static final Map<UUID, Integer> lastPlayerCounts = new ConcurrentHashMap<>();
     // Timer for periodic VC name updates
     private static final java.util.Timer vcUpdateTimer = new java.util.Timer(true);
     private static final long VC_UPDATE_INTERVAL_MS = 310_000; // 5m 10s
@@ -151,15 +151,21 @@ public final class GroupManager {
         if (bot == null) return;
 
         new Thread(() -> {
-            List<ServerPlayer> players = groupPlayerMap.get(groupId);
-            int playerCount = (players != null) ? players.size() : 0;
+            bot.getLifecycleLock().lock();
+            try {
+                // Read the player count under the lock so a stale count from a
+                // just-superseded join/leave can't disconnect an active bot.
+                List<ServerPlayer> players = groupPlayerMap.get(groupId);
+                int playerCount = (players != null) ? players.size() : 0;
 
-            synchronized (bot) {
                 if (playerCount > 0) {
                     if (!bot.isStarted()) {
                         platform.debug("Permanent group has its first player; connecting bot to Discord VC.");
-                        bot.start();
-                        bot.startDiscordAudioThread(groupId);
+                        if (startVoiceWithRetry(bot)) {
+                            bot.startDiscordAudioThread(groupId);
+                        } else {
+                            platform.error("Failed to connect permanent group bot to Discord VC; will retry on the next group join/leave.");
+                        }
                     }
                 } else {
                     if (bot.isStarted()) {
@@ -168,6 +174,8 @@ public final class GroupManager {
                         bot.stop(false);
                     }
                 }
+            } finally {
+                bot.getLifecycleLock().unlock();
             }
         }, "voicechat-discord: Permanent Group Voice Sync").start();
     }
@@ -198,37 +206,47 @@ public final class GroupManager {
             }
             pendingGroupCreations.put(groupId, bot);
             new Thread(() -> {
-                if (bot.logIn()) {
-                    long permanentChannelId = Core.permanentDiscordChannelId;
-                    if (permanentChannelId <= 0L) {
-                        platform.error("Cannot start permanent group bridge: permanent_discord_channel_id is invalid (" + permanentChannelId + ")");
-                        pendingGroupCreations.remove(groupId);
-                        bot.stop(false);
-                        return;
-                    }
-                    bot.setManagedDiscordVoiceChannel(permanentChannelId);
-                    bot.start();
-
-                    pendingGroupCreations.remove(groupId);
-                    synchronized (removedBeforeCreation) {
-                        if (removedBeforeCreation.contains(groupId)) {
-                            platform.debug("Permanent group " + groupId + " was removed before startup finished.");
-                            removedBeforeCreation.remove(groupId);
-                            bot.disconnect();
+                bot.getLifecycleLock().lock();
+                try {
+                    if (bot.logIn()) {
+                        long permanentChannelId = Core.permanentDiscordChannelId;
+                        if (permanentChannelId <= 0L) {
+                            platform.error("Cannot start permanent group bridge: permanent_discord_channel_id is invalid (" + permanentChannelId + ")");
+                            pendingGroupCreations.remove(groupId);
                             bot.stop(false);
                             return;
                         }
-                    }
+                        bot.setManagedDiscordVoiceChannel(permanentChannelId);
+                        // Note: the bot only joins voice once players are in the group
+                        // (syncPermanentGroupVoiceConnection below); start() here connects
+                        // early so the channel is claimed, and failures are non-fatal.
+                        bot.start();
 
-                    groupPlayerMap.putIfAbsent(groupId, new CopyOnWriteArrayList<>());
-                    groupBotMap.put(groupId, bot);
-                    platform.info("Linked permanent group " + group.getName() + " (" + groupId + ") to Discord channel " + Core.permanentDiscordChannelId + "; bot will join voice when players are in the group.");
-                    processQueuedJoinEvents(groupId, group);
-                    syncPermanentGroupVoiceConnection(groupId);
-                } else {
-                    platform.error("Failed to login to Discord for permanent group " + group.getName() + " (" + groupId + ")");
-                    pendingGroupCreations.remove(groupId);
+                        pendingGroupCreations.remove(groupId);
+                        synchronized (removedBeforeCreation) {
+                            if (removedBeforeCreation.contains(groupId)) {
+                                platform.debug("Permanent group " + groupId + " was removed before startup finished.");
+                                removedBeforeCreation.remove(groupId);
+                                bot.disconnect();
+                                bot.stop(false);
+                                return;
+                            }
+                        }
+
+                        groupPlayerMap.putIfAbsent(groupId, new CopyOnWriteArrayList<>());
+                        groupBotMap.put(groupId, bot);
+                        platform.info("Linked permanent group " + group.getName() + " (" + groupId + ") to Discord channel " + Core.permanentDiscordChannelId + "; bot will join voice when players are in the group.");
+                    } else {
+                        platform.error("Failed to login to Discord for permanent group " + group.getName() + " (" + groupId + ")");
+                        pendingGroupCreations.remove(groupId);
+                        return;
+                    }
+                } finally {
+                    bot.getLifecycleLock().unlock();
                 }
+                repopulateGroupPlayers(groupId, group);
+                processQueuedJoinEvents(groupId, group);
+                syncPermanentGroupVoiceConnection(groupId);
             }, "voicechat-discord: Permanent Group Bot Start").start();
         }
     }
@@ -273,6 +291,124 @@ public final class GroupManager {
         permanentGroupId = permanentGroup.getId();
         groupPlayerMap.putIfAbsent(permanentGroupId, new CopyOnWriteArrayList<>());
         startPermanentGroupBridge(permanentGroup);
+    }
+
+    /**
+     * Re-adds online players that are already members of the given voicechat group
+     * to our tracking map. Needed after a config reload, which clears all tracked
+     * state while players may still be sitting in the (persistent) group.
+     * Quiet: no join messages are sent; audio channels are created lazily.
+     */
+    private static void repopulateGroupPlayers(UUID groupId, Group group) {
+        try {
+            List<ServerPlayer> players = groupPlayerMap.computeIfAbsent(groupId, k -> new CopyOnWriteArrayList<>());
+            for (UUID playerUuid : platform.getOnlinePlayerUuids()) {
+                VoicechatConnection connection = Core.api.getConnectionOf(playerUuid);
+                if (connection == null) continue;
+                Group playerGroup = connection.getGroup();
+                if (playerGroup == null || !groupId.equals(playerGroup.getId())) continue;
+                ServerPlayer player = connection.getPlayer();
+                if (player == null) continue;
+                boolean present = players.stream().anyMatch(p -> p.getUuid().equals(playerUuid));
+                if (!present) {
+                    players.add(player);
+                    platform.debug("Repopulated player " + playerUuid + " into group " + groupId + " (" + group.getName() + ")");
+                }
+            }
+        } catch (Throwable t) {
+            platform.error("Failed to repopulate players for group " + groupId, t);
+        }
+    }
+
+    /**
+     * Starts the bot's voice connection, retrying once after a short delay.
+     * Discord can cancel a join request that races the gateway echo of a
+     * just-completed disconnect ("request was cancelled/dropped"), so a single
+     * spaced retry resolves the common restart race.
+     */
+    public static boolean startVoiceWithRetry(DiscordBot bot) {
+        if (bot.start()) return true;
+        platform.warn("Voice connect attempt failed (vcid=" + bot.getDiscordChannelId() + "); retrying in 1 second...");
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        return bot.start();
+    }
+
+    /**
+     * Restarts a bot's Discord session because the voice receive path is corrupted
+     * (detected by the native watchdog). Skips silently if a lifecycle operation
+     * (e.g. a manual restart) is already in progress.
+     */
+    public static void autoRestartBot(DiscordBot bot) {
+        UUID groupId = getGroupIdForBot(bot);
+        if (groupId == null) return;
+        new Thread(() -> {
+            if (!bot.getLifecycleLock().tryLock()) {
+                platform.warn("Voice receive session corrupted, but a bot lifecycle operation is already in progress; skipping auto-restart.");
+                return;
+            }
+            try {
+                platform.warn("Detected corrupted Discord voice receive session (vcid=" + bot.getDiscordChannelId() + "); automatically restarting the bot.");
+                bot.disconnect();
+                bot.stop(false);
+                try {
+                    // Give Discord time to process the disconnect before rejoining,
+                    // or the join can be cancelled by the leave's gateway echo.
+                    Thread.sleep(750);
+                } catch (InterruptedException ignored) {}
+                if (bot.logIn() && startVoiceWithRetry(bot)) {
+                    bot.startDiscordAudioThread(groupId);
+                    platform.info("Auto-restart of Discord bot complete (vcid=" + bot.getDiscordChannelId() + ").");
+                } else {
+                    platform.error("Auto-restart of Discord bot failed (vcid=" + bot.getDiscordChannelId() + "). A manual /dvcgroup restart may be needed.");
+                }
+            } catch (Throwable t) {
+                platform.error("Auto-restart of Discord bot failed", t);
+            } finally {
+                bot.getLifecycleLock().unlock();
+            }
+        }, "voicechat-discord: Auto Restart").start();
+    }
+
+    /**
+     * Removes the Discord-side link for a group: Discord user audio channels and
+     * volume categories, plus the group->bot association. Used when the bot is
+     * stopped manually (dvcgroup stop) and when the group is removed.
+     * Does not touch groupPlayerMap/groupOwnerMap: the voicechat group may still exist.
+     */
+    public static void unlinkGroupFromDiscord(UUID groupId) {
+        DiscordBot bot = groupBotMap.get(groupId);
+        if (bot != null) {
+            Long discordChannelId = bot.getDiscordChannelId();
+            if (discordChannelId != null) {
+                java.util.List<Long> usersInChannel = new java.util.ArrayList<>();
+                for (var entry : discordUserChannelMap.entrySet()) {
+                    if (discordChannelId.equals(entry.getValue())) {
+                        usersInChannel.add(entry.getKey());
+                    }
+                }
+                for (Long discordUserId : usersInChannel) {
+                    String username = discordUserNameMap.get(discordUserId);
+                    if (username != null) {
+                        DiscordBot.removeDiscordUserChannelsFromGroup(groupId, discordUserId);
+                        String categoryId = DiscordBot.discordUserCategoryMap.remove(discordUserId);
+                        if (categoryId != null) {
+                            Core.api.unregisterVolumeCategory(categoryId);
+                            platform.debug("Unregistered volume category for Discord user '" + username + "' (ID: " + discordUserId + ")");
+                        }
+                    }
+                    discordUserChannelMap.remove(discordUserId);
+                    discordUserNameMap.remove(discordUserId);
+                }
+            }
+        }
+        groupBotMap.remove(groupId);
+        groupAudioChannels.remove(groupId);
+        lastPlayerCounts.remove(groupId);
     }
 
     public static void clearTrackedState() {
@@ -474,25 +610,42 @@ public final class GroupManager {
                     bot.createDiscordVoiceChannelAsync(group.getName(), discordChannelId -> {
                         if (discordChannelId == null) {
                             platform.error("Failed to create Discord voice channel for group " + group.getName() + " (" + groupId + ")");
+                            pendingGroupCreations.remove(groupId);
                             return;
                         }
 
-                        bot.start();
-
-                        pendingGroupCreations.remove(groupId);
-                        synchronized (removedBeforeCreation) {
-                            if (removedBeforeCreation.contains(groupId)) {
-                                platform.debug("Group " + groupId + " (" + group.getName() + ") was removed before Discord channel creation finished. Deleting channel.");
+                        bot.getLifecycleLock().lock();
+                        try {
+                            boolean started = startVoiceWithRetry(bot);
+                            if (!started) {
+                                platform.error("Failed to start voice connection for group " + group.getName() + " (" + groupId + "); deleting the Discord channel.");
+                                pendingGroupCreations.remove(groupId);
                                 bot.deleteDiscordVoiceChannelAsync();
-                                removedBeforeCreation.remove(groupId);
                                 bot.stop();
+                                platform.sendMessage(player, Component.red("[Discord] "),
+                                    Component.white("Failed to connect the Discord bot for group '"),
+                                    Component.yellow(group.getName()),
+                                    Component.white("'. Please try recreating the group."));
                                 return;
                             }
-                        }
 
-                        bot.startDiscordAudioThread(groupId);
-                        groupBotMap.put(groupId, bot);
-                        platform.debug("Linked groupId " + groupId + " (" + group.getName() + ") to bot (discordChannelId=" + discordChannelId + ")");
+                            pendingGroupCreations.remove(groupId);
+                            synchronized (removedBeforeCreation) {
+                                if (removedBeforeCreation.contains(groupId)) {
+                                    platform.debug("Group " + groupId + " (" + group.getName() + ") was removed before Discord channel creation finished. Deleting channel.");
+                                    bot.deleteDiscordVoiceChannelAsync();
+                                    removedBeforeCreation.remove(groupId);
+                                    bot.stop();
+                                    return;
+                                }
+                            }
+
+                            bot.startDiscordAudioThread(groupId);
+                            groupBotMap.put(groupId, bot);
+                            platform.debug("Linked groupId " + groupId + " (" + group.getName() + ") to bot (discordChannelId=" + discordChannelId + ")");
+                        } finally {
+                            bot.getLifecycleLock().unlock();
+                        }
 
                         platform.debug(player.getUuid() + " (" + platform.getName(player) + ") created " + groupId + " (" + group.getName() + ")");
 
@@ -537,57 +690,33 @@ public final class GroupManager {
             }
         }
 
-        // Clean up all Discord users in the group's VC as if they left
+        // Clean up all Discord users in the group's VC as if they left,
+        // and remove the group->bot association
         DiscordBot bot = groupBotMap.get(groupId);
-        if (bot != null) {
-            Long discordChannelId = bot.getDiscordChannelId();
-            if (discordChannelId != null) {
-                // Find all Discord users in this VC
-                java.util.List<Long> usersInChannel = new java.util.ArrayList<>();
-                for (var entry : discordUserChannelMap.entrySet()) {
-                    if (discordChannelId.equals(entry.getValue())) {
-                        usersInChannel.add(entry.getKey());
-                    }
-                }
-                for (Long discordUserId : usersInChannel) {
-                    String username = discordUserNameMap.get(discordUserId);
-                    if (username != null) {
-                        DiscordBot.removeDiscordUserChannelsFromGroup(groupId, discordUserId);
-                        String categoryId = DiscordBot.discordUserCategoryMap.remove(discordUserId);
-                        if (categoryId != null) {
-                            Core.api.unregisterVolumeCategory(categoryId);
-                            platform.debug("Unregistered volume category for Discord user '" + username + "' (ID: " + discordUserId + ")");
-                        }
-                    }
-                    discordUserChannelMap.remove(discordUserId);
-                    discordUserNameMap.remove(discordUserId);
-                }
-            }
-        }
-
-        bot = groupBotMap.remove(groupId);
+        unlinkGroupFromDiscord(groupId);
         if (bot != null) {
             platform.debug("onGroupRemoved: Stopping Discord bot for group: " + group.getName() + ")");
-            if (permanent) {
-                DiscordBot permanentBot = bot;
-                new Thread(() -> {
-                    try {
-                        permanentBot.disconnect();
-                        permanentBot.stop(false);
-                    } catch (Throwable t) {
-                        platform.error("onGroupRemoved: Failed to stop permanent Discord bot for group: " + group.getName() + " (" + groupId + ")", t);
+            final DiscordBot stoppingBot = bot;
+            new Thread(() -> {
+                stoppingBot.getLifecycleLock().lock();
+                try {
+                    if (permanent) {
+                        stoppingBot.disconnect();
+                        stoppingBot.stop(false);
+                    } else {
+                        stoppingBot.stop();
                     }
-                }, "voicechat-discord: Permanent Group Remove Stop").start();
-            } else {
-                bot.stop();
-            }
-            platform.debug("onGroupRemoved: Stopped Discord bot for group: " + group.getName() + ")");
+                } catch (Throwable t) {
+                    platform.error("onGroupRemoved: Failed to stop Discord bot for group: " + group.getName() + " (" + groupId + ")", t);
+                } finally {
+                    stoppingBot.getLifecycleLock().unlock();
+                }
+            }, "voicechat-discord: Group Remove Stop").start();
+            platform.debug("onGroupRemoved: Stopping Discord bot for group: " + group.getName() + ") in background");
         }
 
-        groupAudioChannels.remove(groupId);
         groupPlayerMap.remove(groupId);
         groupOwnerMap.remove(groupId);
-        lastPlayerCounts.remove(groupId);
         if (permanent) {
             permanentGroupId = null;
         }

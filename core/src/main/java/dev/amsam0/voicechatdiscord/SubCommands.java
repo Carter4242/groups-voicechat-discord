@@ -158,18 +158,28 @@ public final class SubCommands {
         UUID finalGroupId = groupId;
         boolean permanentGroup = GroupManager.isPermanentGroup(groupId);
         new Thread(() -> {
+            if (!bot.getLifecycleLock().tryLock()) {
+                platform.sendMessage(sender, Component.red("Another start/stop/restart of this bot is already in progress. Please wait a moment."));
+                return;
+            }
             try {
                 bot.disconnect();
                 if (permanentGroup) {
                     bot.stop(false);
                     GroupManager.updatePermanentChannelNameForShutdown(bot);
                 } else {
+                    // Fully unlink the group first (while the channel ID is still
+                    // known) so /dvcgroupmsg and audio bridging don't keep acting
+                    // on a dead Discord channel.
+                    GroupManager.unlinkGroupFromDiscord(finalGroupId);
                     bot.stop(); // Default: deletes the channel
                 }
                 platform.sendMessage(sender, Component.green("Successfully stopped the Discord bot for your group."));
             } catch (Throwable e) {
                 platform.error("Failed to stop Discord bot for group: " + finalGroupId, e);
                 platform.sendMessage(sender, Component.red("Failed to stop the Discord bot for your group. See console for details."));
+            } finally {
+                bot.getLifecycleLock().unlock();
             }
         }, "voicechat-discord: StopBot").start();
     }
@@ -217,19 +227,36 @@ public final class SubCommands {
 
         UUID finalGroupId = groupId;
         new Thread(() -> {
+            // tryLock: spamming restart must not stack interleaved stop/start
+            // sequences (this used to leak duplicate audio threads and stale
+            // voice sessions, garbling or killing Discord -> Minecraft audio).
+            if (!bot.getLifecycleLock().tryLock()) {
+                platform.sendMessage(sender, Component.red("A restart of this bot is already in progress. Please wait a moment."));
+                return;
+            }
             try {
                 bot.disconnect();
                 bot.stop(false); // Do not delete the channel when restarting
                 try {
-                    Thread.sleep(300);
+                    // Give Discord time to process the disconnect before rejoining,
+                    // or the join can be cancelled by the leave's gateway echo.
+                    Thread.sleep(750);
                 } catch (InterruptedException ignored) {}
-                bot.logIn();
-                bot.start();
+                if (!bot.logIn()) {
+                    platform.sendMessage(sender, Component.red("Failed to log the Discord bot back in. See console for details."));
+                    return;
+                }
+                if (!GroupManager.startVoiceWithRetry(bot)) {
+                    platform.sendMessage(sender, Component.red("The Discord bot could not rejoin the voice channel. See console for details, then try /dvcgroup restart again."));
+                    return;
+                }
                 bot.startDiscordAudioThread(finalGroupId);
                 platform.sendMessage(sender, Component.green("Successfully restarted the Discord bot for your group."));
             } catch (Throwable e) {
                 platform.error("Failed to restart Discord bot for group: " + finalGroupId, e);
                 platform.sendMessage(sender, Component.red("Failed to restart the Discord bot for your group. See console for details."));
+            } finally {
+                bot.getLifecycleLock().unlock();
             }
         }, "voicechat-discord: RestartBot").start();
     }
@@ -270,6 +297,10 @@ public final class SubCommands {
             );
 
             loadConfig();
+
+            // clearBots() wiped all group<->bot links; re-establish the permanent
+            // bridge (it otherwise only happens on server start).
+            GroupManager.ensurePermanentGroup();
 
             platform.sendMessage(
                     sender,

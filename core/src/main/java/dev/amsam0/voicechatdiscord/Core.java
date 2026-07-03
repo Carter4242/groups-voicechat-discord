@@ -249,14 +249,29 @@ public final class Core {
         platform.info("Stopping all Discord bots...");
         bots.forEach(discordBot -> {
             platform.info("Stopping bot (vcId=" + discordBot.getDiscordChannelId() + ")...");
-            UUID groupId = GroupManager.getGroupIdForBot(discordBot);
-            if (GroupManager.isPermanentGroup(groupId)) {
-                GroupManager.updatePermanentChannelNameForShutdown(discordBot);
-                discordBot.disconnect();
-                discordBot.stop(false);
-                platform.info("Stopped permanent group bot.");
-            } else {
-                discordBot.stop();
+            // Wait for any in-flight restart/stop to finish so we never free a bot
+            // mid-lifecycle (that used to leave zombie voice sessions connected).
+            boolean locked = false;
+            try {
+                locked = discordBot.getLifecycleLock().tryLock(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            if (!locked) {
+                platform.warn("Timed out waiting for an in-progress lifecycle operation on bot (vcId=" + discordBot.getDiscordChannelId() + "); stopping anyway.");
+            }
+            try {
+                UUID groupId = GroupManager.getGroupIdForBot(discordBot);
+                if (GroupManager.isPermanentGroup(groupId)) {
+                    GroupManager.updatePermanentChannelNameForShutdown(discordBot);
+                    discordBot.disconnect();
+                    discordBot.stop(false);
+                    platform.info("Stopped permanent group bot.");
+                } else {
+                    discordBot.stop();
+                }
+            } finally {
+                if (locked) discordBot.getLifecycleLock().unlock();
             }
         });
         platform.info("Waiting for all delete threads to finish...");

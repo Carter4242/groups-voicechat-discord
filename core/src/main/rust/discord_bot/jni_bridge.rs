@@ -54,7 +54,10 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1new<'local>
             Arc::new(java_vm),
             java_bot_obj,
         ));
-        Arc::into_raw(discord_bot) as jlong
+        let weak = Arc::downgrade(&discord_bot);
+        let ptr = Arc::into_raw(discord_bot) as jlong;
+        super::BOT_REGISTRY.insert(ptr as usize, weak);
+        ptr
     }));
     match result {
         Ok(val) => val,
@@ -181,8 +184,14 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_DiscordBot__1free(
 ) {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let discord_bot = unsafe { Arc::from_raw(ptr as *const DiscordBot) };
+        super::BOT_REGISTRY.remove(&(ptr as usize));
         if let Some(uuid) = discord_bot.get_audio_source_uuid() {
             crate::discord_bot::discord_speak::remove_audio_source(&uuid);
+        }
+        // Defensively leave any active voice call so a freed bot can never
+        // linger connected to a channel (stop() is a no-op if not started).
+        if let Err(e) = discord_bot.stop() {
+            tracing::warn!(?e, "Failed to stop bot while freeing it");
         }
     }));
     if let Err(payload) = result {

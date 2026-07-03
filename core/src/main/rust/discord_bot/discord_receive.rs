@@ -43,8 +43,11 @@ impl EventHandler for VoiceHandler {
         if let EventContext::VoiceTick(tick) = ctx {
             let buffer = &self.bot.discord_to_mc_buffer;
             if buffer.received_audio_tx.is_full() {
-                tracing::warn!("VoiceHandler receive buffer is full for vc_id={}", self.vc_id);
-                return None;
+                // The consumer is behind. Drop the OLDEST tick (not this one) so
+                // the bridge stays near-realtime and recovers as soon as the
+                // consumer catches up, instead of freezing 1s in the past.
+                let _ = buffer.received_audio_rx.try_recv();
+                tracing::warn!("VoiceHandler receive buffer is full for vc_id={}; dropped oldest tick", self.vc_id);
             }
             // Maintain a stable SSRC order for this frame, appending new SSRCs to the end.
             let mut ssrc_order = self.last_ssrc_order.lock().unwrap();
@@ -75,6 +78,12 @@ impl EventHandler for VoiceHandler {
                 };
                 let payload = payload[start..].to_vec();
                 payload_map.insert(ssrc, payload);
+            }
+
+            if !payload_map.is_empty() {
+                // Parseable audio arrived; lets the corruption watchdog tell
+                // healthy bots apart from ones whose receive path went silent.
+                self.bot.mark_audio_received();
             }
 
             // Build the new order: keep previous order for still-active SSRCs, append new ones at the end

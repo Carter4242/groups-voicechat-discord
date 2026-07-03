@@ -1,0 +1,183 @@
+[package]
+authors = ["Kyle Simpson <kyleandrew.simpson@gmail.com>"]
+description = "An async Rust library for the Discord voice API."
+documentation = "https://docs.rs/songbird"
+edition = "2021"
+homepage = "https://github.com/serenity-rs/songbird"
+include = ["src/**/*.rs", "Cargo.toml", "build.rs"]
+keywords = ["discord", "api", "rtp", "audio"]
+license = "ISC"
+name = "songbird"
+readme = "README.md"
+repository = "https://github.com/serenity-rs/songbird.git"
+rust-version = "1.83.0"
+version = "0.6.0"
+
+[dependencies]
+aead = { optional = true, version = "0.5.2" }
+aes-gcm = { optional = true, version = "0.10.3" }
+async-trait = { optional = true, version = "0.1" }
+opus2 = { optional = true, version = "0.4.0" }
+byteorder = { optional = true, version = "1" }
+bytes = { optional = true, version = "1" }
+chacha20poly1305 = { optional = true, version = "0.10.1" }
+crypto-common = { optional = true, features = ["std"], version = "0.1" }
+dashmap = { optional = true, version = "6.1.0" }
+davey = { optional = true, version = "0.1.2" }
+derivative = "2"
+discortp = { default-features = false, features = [
+    "discord",
+    "pnet",
+    "rtp",
+], optional = true, version = "0.6" }
+either = "1.9.0"
+flume = { optional = true, version = "0.11" }
+futures = "0.3"
+nohash-hasher = { optional = true, version = "0.2.0" }
+parking_lot = { optional = true, version = "0.12" }
+pin-project = "1"
+rand = { optional = true, version = "0.9" }
+reqwest = { default-features = false, features = [
+    "stream",
+], optional = true, version = "0.12.2" }
+ringbuf = { optional = true, version = "0.4" }
+rubato = { optional = true, version = "0.16" }
+rusty_pool = { optional = true, version = "0.7" }
+serde = { version = "1", features = ["derive"] }
+serde-aux = { optional = true, version = "4" }
+serde_json = "1"
+serenity = { default-features = false, optional = true, version = "0.12.0", features = [
+    "voice",
+    "gateway",
+] }
+serenity-voice-model = { optional = true, version = "0.3" }
+socket2 = { optional = true, version = "0.5" }
+streamcatcher = { optional = true, version = "1" }
+stream_lib = { default-features = false, optional = true, version = "0.5.2" }
+symphonia = { default-features = false, optional = true, version = "0.5.2" }
+symphonia-core = { optional = true, version = "0.5.2" }
+tokio = { default-features = false, optional = true, version = "1.0" }
+tokio-tungstenite = { optional = true, version = "0.26", features = ["url"] }
+tokio-websockets = { optional = true, version = "0.11", features = [
+    "client",
+    "fastrand",
+    "sha1_smol",
+    "simd",
+] }
+tokio-util = { features = ["io"], optional = true, version = "0.7" }
+tracing = { version = "0.1", features = ["log"] }
+tracing-futures = "0.2"
+twilight-gateway = { default-features = false, optional = true, version = ">= 0.16.0, <= 0.17" }
+twilight-model = { default-features = false, optional = true, version = ">= 0.16.0, <= 0.17" }
+typenum = { optional = true, version = "1.17.0" }
+url = { optional = true, version = "2" }
+uuid = { features = ["v4"], optional = true, version = "1" }
+nonmax = "0.5.5"
+enum-map = "2.7.3"
+
+[dev-dependencies]
+byteorder = "1"
+criterion = "0.5"
+ntest = "0.9"
+symphonia = { version = "0.5.2", features = ["aac", "isomp4", "mp3"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "test-util"] }
+
+[features]
+# Core features
+default = ["driver", "gateway", "rustls", "serenity", "tungstenite"]
+gateway = [
+    "dep:async-trait",
+    "dep:dashmap",
+    "dep:flume",
+    "dep:parking_lot",
+    "dep:tokio",
+    "tokio?/sync",
+    "tokio?/time",
+]
+driver = [
+    "dep:aead",
+    "dep:aes-gcm",
+    "dep:async-trait",
+    "dep:opus2",
+    "dep:byteorder",
+    "dep:bytes",
+    "dep:chacha20poly1305",
+    "dep:crypto-common",
+    "dep:davey",
+    "dep:discortp",
+    "dep:flume",
+    "dep:nohash-hasher",
+    "dep:parking_lot",
+    "dep:rand",
+    "dep:reqwest",
+    "dep:ringbuf",
+    "dep:rubato",
+    "dep:rusty_pool",
+    "dep:serde-aux",
+    "dep:serenity-voice-model",
+    "dep:socket2",
+    "dep:stream_lib",
+    "dep:streamcatcher",
+    "dep:symphonia",
+    "dep:symphonia-core",
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:typenum",
+    "dep:url",
+    "dep:uuid",
+    "tokio?/fs",
+    "tokio?/io-util",
+    "tokio?/macros",
+    "tokio?/net",
+    "tokio?/process",
+    "tokio?/rt",
+    "tokio?/sync",
+    "tokio?/time",
+]
+rustls = [
+    "reqwest?/rustls-tls",
+    "serenity?/rustls_backend",
+    "stream_lib?/rustls-tls",
+    "tokio-tungstenite?/rustls-tls-webpki-roots",
+    "tokio-websockets?/ring",
+    "tokio-websockets?/rustls-native-roots",
+    "twilight-gateway?/rustls-native-roots",
+]
+native = [
+    "reqwest?/native-tls",
+    "serenity?/native_tls_backend",
+    "stream_lib?/native-tls",
+    "tokio-tungstenite?/native-tls",
+    "tokio-websockets?/native-tls",
+    "twilight-gateway?/native-tls",
+]
+tungstenite = ["dep:tokio-tungstenite"]
+tws = ["dep:tokio-websockets"]
+twilight = ["dep:twilight-gateway", "dep:twilight-model"]
+
+# Behaviour altering features.
+builtin-queue = []
+receive = ["dep:bytes", "discortp?/demux", "discortp?/rtcp"]
+
+# Used for docgen/testing/benchmarking.
+full-doc = ["default", "tungstenite", "twilight", "builtin-queue", "receive"]
+internals = ["dep:byteorder"]
+
+[lib]
+bench = false
+
+[[bench]]
+name = "base-mixing"
+path = "benches/base-mixing.rs"
+required-features = ["internals"]
+harness = false
+
+[[bench]]
+name = "mixing-task"
+path = "benches/mixing-task.rs"
+required-features = ["internals"]
+harness = false
+
+[package.metadata.docs.rs]
+features = ["full-doc"]
+rustdoc-args = ["--cfg", "docsrs"]

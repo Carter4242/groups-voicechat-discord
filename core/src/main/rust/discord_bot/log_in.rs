@@ -54,7 +54,10 @@ impl super::DiscordBot {
         *client_task = Some(
             RUNTIME
                 .spawn(async move {
-                    let intents = GatewayIntents::GUILD_VOICE_STATES
+                    // GUILDS is required so GUILD_CREATE populates the cache with
+                    // current voice states, letting us sync users already in a VC.
+                    let intents = GatewayIntents::GUILDS
+                        | GatewayIntents::GUILD_VOICE_STATES
                         | GatewayIntents::GUILD_MESSAGES
                         | GatewayIntents::MESSAGE_CONTENT;
 
@@ -136,6 +139,9 @@ impl Handler {
 #[serenity::async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, _ready: Ready) {
+        if let Some(bot) = self.bot.upgrade() {
+            bot.set_cache(ctx.cache.clone());
+        }
         if let Err(e) = self.log_in_tx.send(Ok(ctx.http)).await {
             tracing::error!("log_in rx dropped - login result could not be sent: {e}");
         }

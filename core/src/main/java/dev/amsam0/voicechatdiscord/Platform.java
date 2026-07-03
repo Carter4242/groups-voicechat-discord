@@ -40,6 +40,8 @@ public interface Platform {
 
     void playPopSound(Player player);
 
+    java.util.Collection<java.util.UUID> getOnlinePlayerUuids();
+
     default void debug(String message) {
         if (debugLevel >= 1) info("[DEBUG 1] " + message);
     }

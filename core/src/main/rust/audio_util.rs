@@ -1,10 +1,11 @@
-use songbird::driver::opus::{Channels, SampleRate};
+use songbird::driver::opus::Channels;
 use tracing::{warn};
 
-pub const OPUS_SAMPLE_RATE: SampleRate = SampleRate::Hz48000;
+// opus2 (songbird 0.6+) takes the sample rate as a plain u32
+pub const OPUS_SAMPLE_RATE: u32 = 48_000;
 pub const OPUS_CHANNELS: Channels = Channels::Mono;
 
-pub const SAMPLE_RATE: u32 = OPUS_SAMPLE_RATE as i32 as u32;
+pub const SAMPLE_RATE: u32 = OPUS_SAMPLE_RATE;
 pub const CHANNELS: u32 = OPUS_CHANNELS as i32 as u32;
 
 pub const MAX_AUDIO_BUFFER: usize = 50;

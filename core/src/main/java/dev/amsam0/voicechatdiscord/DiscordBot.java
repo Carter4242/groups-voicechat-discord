@@ -11,7 +11,7 @@ import static dev.amsam0.voicechatdiscord.Core.platform;
 
 public final class DiscordBot {
     // Map of Discord user IDs to their category IDs (as String)
-    public static final java.util.Map<Long, String> discordUserCategoryMap = new java.util.HashMap<>();
+    public static final java.util.Map<Long, String> discordUserCategoryMap = new ConcurrentHashMap<>();
     // Track the last set of talking Discord users shown to the group
     private java.util.Set<String> lastSentTalkingUsers = java.util.Collections.emptySet();
     private long lastSentTime = 0L;
@@ -19,7 +19,12 @@ public final class DiscordBot {
      * Thread that polls for Discord audio and sends it to group members.
      */
     private Thread discordAudioThread;
-    private volatile boolean running = false;
+    // Each audio thread owns its token; a stop only invalidates the token of the
+    // thread it targeted, so a stale thread can never be revived by a later start.
+    private final Object audioThreadLock = new Object();
+    private java.util.concurrent.atomic.AtomicBoolean audioThreadToken = null;
+    // Serializes stop/start/restart sequences so they can't interleave.
+    private final java.util.concurrent.locks.ReentrantLock lifecycleLock = new java.util.concurrent.locks.ReentrantLock();
     private volatile boolean freed = false;
     // Discord connection and bridging logic
     private final long categoryId;
@@ -44,6 +49,14 @@ public final class DiscordBot {
 
     public Long getDiscordChannelId() {
         return discordChannelId;
+    }
+
+    /**
+     * Lock serializing this bot's stop/start/restart sequences. Hold it for the
+     * full sequence (disconnect, stop, logIn, start, startDiscordAudioThread).
+     */
+    public java.util.concurrent.locks.ReentrantLock getLifecycleLock() {
+        return lifecycleLock;
     }
 
     private native long _new(String token, long categoryId);
@@ -316,26 +329,30 @@ public final class DiscordBot {
             platform.warn("Attempted to start audio thread after bot was freed or ptr was invalid (vcid=" + discordChannelId + ")");
             return;
         }
-        running = true;
-        discordAudioThread = new Thread(() -> {
-            while (running && !freed) {
-                try {
-                    if (freed) break;
-                    Object result = _blockForSpeakingBufferOpusData(ptr);
-                    if (freed) break;
+        synchronized (audioThreadLock) {
+            // Never allow two live consumer threads: stop any existing one first.
+            stopDiscordAudioThreadLocked();
+            final java.util.concurrent.atomic.AtomicBoolean token = new java.util.concurrent.atomic.AtomicBoolean(true);
+            audioThreadToken = token;
+            discordAudioThread = new Thread(() -> {
+                while (token.get() && !freed) {
+                    try {
+                        Object result = _blockForSpeakingBufferOpusData(ptr);
+                        if (!token.get() || freed) break;
 
-                    if (result instanceof byte[][][] userPackets && userPackets.length > 0) {
-                        sendDiscordAudioToGroup(groupId, userPackets);
-                    } else {
-                        sendDiscordAudioToGroup(groupId, new byte[0][][]);
+                        if (result instanceof byte[][][] userPackets && userPackets.length > 0) {
+                            sendDiscordAudioToGroup(groupId, userPackets);
+                        } else {
+                            sendDiscordAudioToGroup(groupId, new byte[0][][]);
+                        }
+                    } catch (Throwable t) {
+                        platform.error("Error in Discord audio thread for bot (vcid=" + discordChannelId + ")", t);
                     }
-                } catch (Throwable t) {
-                    platform.error("Error in Discord audio thread for bot (vcid=" + discordChannelId + ")", t);
                 }
-            }
-        }, "DiscordAudioBridgeThread");
-        discordAudioThread.setDaemon(true);
-        discordAudioThread.start();
+            }, "DiscordAudioBridgeThread");
+            discordAudioThread.setDaemon(true);
+            discordAudioThread.start();
+        }
     }
 
     
@@ -414,6 +431,11 @@ public final class DiscordBot {
                 var playerId = entry.getKey();
                 var playerChannels = entry.getValue();
                 var channel = playerChannels != null ? playerChannels.get(discordUserId) : null;
+                if (channel != null && channel.isClosed()) {
+                    // A closed channel can never deliver audio again; drop it so it gets recreated below.
+                    playerChannels.remove(discordUserId, channel);
+                    channel = null;
+                }
                 if (channel == null) {
                     // Create channel on the fly
                     var connection = Core.api.getConnectionOf(playerId);
@@ -450,11 +472,26 @@ public final class DiscordBot {
      * Stops the background thread for Discord audio bridging.
      */
     private void stopDiscordAudioThread() {
-        running = false;
+        synchronized (audioThreadLock) {
+            stopDiscordAudioThreadLocked();
+        }
+    }
+
+    /**
+     * Must be called while holding audioThreadLock. Invalidates the current
+     * thread's token so it exits even if the join below times out.
+     */
+    private void stopDiscordAudioThreadLocked() {
+        if (audioThreadToken != null) {
+            audioThreadToken.set(false);
+            audioThreadToken = null;
+        }
         if (discordAudioThread != null) {
             discordAudioThread.interrupt();
             try {
-                discordAudioThread.join(100);
+                // The native poll blocks for at most 50ms; give the thread time
+                // to finish an in-flight fan-out as well.
+                discordAudioThread.join(250);
             } catch (InterruptedException ignored) {}
             discordAudioThread = null;
         }
@@ -489,20 +526,26 @@ public final class DiscordBot {
 
     private native String _start(long ptr) throws Throwable;
 
-    public void start() {
+    /**
+     * Starts the voice connection.
+     * @return true if the bot successfully joined the voice channel
+     */
+    public boolean start() {
         if (freed || ptr == 0) {
             platform.warn("Attempted to start after bot was freed or ptr was invalid");
-            return;
+            return false;
         }
         try {
             String vcName = _start(ptr);
             if (vcName == null || vcName.equals("<panic>") || vcName.equals("<error>") || vcName.equals("<null pointer error>")) {
                 platform.error("Failed to start voice connection for bot (vcid=" + discordChannelId + "). Check Rust logs for details. Returned: " + vcName);
-            } else {
-                platform.debug("Started voice chat for group in channel '" + vcName + "' with bot (vcid=" + discordChannelId + ")");
+                return false;
             }
+            platform.debug("Started voice chat for group in channel '" + vcName + "' with bot (vcid=" + discordChannelId + ")");
+            return true;
         } catch (Throwable e) {
             platform.error("Failed to start voice connection for bot (vcid=" + discordChannelId + "). Check Rust logs for details.", e);
+            return false;
         }
     }
 
@@ -735,6 +778,9 @@ public final class DiscordBot {
      * @param joined True if the user joined, false if left
      */
     public void onDiscordUserVoiceState(long discordUserId, String username, long channelId, boolean joined) {
+        if (freed || ptr == 0) {
+            return;
+        }
         if (Core.botUserIds != null && Core.botUserIds.contains(discordUserId)) {
             return;
         }
@@ -912,6 +958,25 @@ public final class DiscordBot {
         }
     }
     
+    /**
+     * Called from Rust when the voice receive session appears corrupted
+     * (sustained unparseable/undecryptable RTP) AND this bot received no
+     * parseable audio during the error window. Rejoining the channel
+     * renegotiates the session, which is the only known recovery.
+     */
+    public void onVoiceReceiveCorrupted() {
+        if (freed || ptr == 0) return;
+        // Second attribution factor: only restart if Discord users are actually
+        // in this bot's channel. No users means nobody can be sending audio, so
+        // the errors must belong to some other bot's session.
+        Long channelId = discordChannelId;
+        if (channelId == null || !GroupManager.discordUserChannelMap.containsValue(channelId)) {
+            platform.debug("Voice receive corruption reported, but no Discord users are in this bot's channel (vcid=" + channelId + "); skipping restart.");
+            return;
+        }
+        GroupManager.autoRestartBot(this);
+    }
+
     /**
      * Formats Discord emotes in a message to :name: for Minecraft display.
      * E.g. <a:Nod:123456789> or <:handrub:123456789> becomes :Nod: or :handrub:

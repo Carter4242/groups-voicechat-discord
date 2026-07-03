@@ -177,6 +177,15 @@ public class PaperPlatform implements Platform {
     }
 
     @Override
+    public java.util.Collection<java.util.UUID> getOnlinePlayerUuids() {
+        java.util.List<java.util.UUID> uuids = new java.util.ArrayList<>();
+        for (Player player : org.bukkit.Bukkit.getOnlinePlayers()) {
+            uuids.add(player.getUniqueId());
+        }
+        return uuids;
+    }
+
+    @Override
     public void playPopSound(de.maxhenkel.voicechat.api.Player player) {
         var bukkitPlayer = (Player) player.getPlayer();
         if (bukkitPlayer != null) {

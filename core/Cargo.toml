@@ -44,15 +44,24 @@ features = ["rt-multi-thread", "parking_lot", "time"]
 [dependencies.serenity]
 version = "0.12.5"
 default-features = false
-features = ["rustls_backend", "client", "http", "model"]
+# "cache" is needed to enumerate users already in a voice channel when the bot
+# (re)joins, so they get bridged without waiting for their next voice state event
+features = ["rustls_backend", "client", "http", "model", "cache"]
 
+# 0.6.0 includes upstreamed DAVE (Discord E2EE voice) support from the same
+# author as the previously-patched beerpsi-forks "davey" branch.
 [dependencies.songbird]
-version = "0.5.0"
+version = "0.6.0"
 features = ["receive"]
 
 [dependencies.symphonia]
 version = "0.5.5"
 features = ["pcm"]
 
+# Pristine songbird 0.6.0 plus a minimal fix (grep for PATCH(voicechat-discord)):
+# VoiceTick packets recomputed their payload bounds from generic crypto-mode
+# constants, ignoring RTP padding and the DAVE E2EE trailer -> received opus
+# frames carried trailing garbage whenever a channel was end-to-end encrypted,
+# silencing Discord -> Minecraft audio. Remove once fixed upstream.
 [patch.crates-io]
-songbird = { git = "https://github.com/beerpsi-forks/songbird", branch = "davey" }
+songbird = { path = "../third_party/songbird" }

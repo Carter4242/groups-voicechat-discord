@@ -17,7 +17,7 @@ use crate::audio_util::{OPUS_SAMPLE_RATE, OPUS_CHANNELS};
 use once_cell::sync::Lazy;
 use crate::discord_bot::PlayerToDiscordBuffer;
 use crate::discord_bot::playout_buffer::PacketLookup;
-use songbird::driver::opus::coder::Decoder as OpusDecoder;
+use songbird::driver::opus::Decoder as OpusDecoder;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -173,18 +173,8 @@ impl io::Read for PlayerAudioSource {
                     let mut pcm = [0i16; 960];
                     match playout.fetch_packet() {
                         PacketLookup::Packet(pkt) => {
-                            // Decode Opus packet
-                            let packet = match (&pkt.opus).as_slice().try_into() {
-                                Ok(p) => p,
-                                Err(_) => {
-                                    tracing::error!("Invalid opus data for user {:?}", uuid);
-                                    user_pcm.insert(uuid, [0; 960]);
-                                    all_samples.push([0; 960]);
-                                    continue;
-                                }
-                            };
-                            let output = (&mut pcm[..]).try_into().unwrap();
-                            match decoder.decode(Some(packet), output, false) {
+                            // Decode Opus packet (opus2 takes the raw byte slice directly)
+                            match decoder.decode(&pkt.opus, &mut pcm[..], false) {
                                 Ok(_) => {
                                     user_pcm.insert(uuid, pcm);
                                     all_samples.push(pcm);
@@ -201,9 +191,8 @@ impl io::Read for PlayerAudioSource {
                             }
                         }
                         PacketLookup::MissedPacket => {
-                            // PLC: decode None
-                            let output = (&mut pcm[..]).try_into().unwrap();
-                            match decoder.decode(None, output, false) {
+                            // PLC: opus2 treats an empty input slice as "packet lost"
+                            match decoder.decode(&[], &mut pcm[..], false) {
                                 Ok(_) => {
                                     user_pcm.insert(uuid, pcm);
                                     all_samples.push(pcm);

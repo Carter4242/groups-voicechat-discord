@@ -25,6 +25,12 @@ mod discord_speak;
 mod jni_bridge;
 mod log_in;
 mod start;
+pub mod watchdog;
+
+/// All live bots, keyed by the raw pointer handed to Java. Used by the voice
+/// receive watchdog to find bots that need a session restart.
+pub(crate) static BOT_REGISTRY: once_cell::sync::Lazy<DashMap<usize, std::sync::Weak<DiscordBot>>> =
+    once_cell::sync::Lazy::new(DashMap::new);
 
 struct DiscordToMinecraftBuffer {
     received_audio_tx: flume::Sender<Vec<(String, u64, Vec<u8>)>>,
@@ -64,6 +70,12 @@ pub struct DiscordBot {
     pub java_bot_obj: GlobalRef,
     /// Map of user_id -> username, updated when users join a channel
     user_id_to_username: Arc<DashMap<u64, String>>,
+    /// Gateway cache, stored on ready; used to enumerate users already in a VC
+    cache: parking_lot::Mutex<Option<Arc<serenity::cache::Cache>>>,
+    /// Milliseconds (since process start) when this bot last received parseable
+    /// voice audio. Lets the watchdog attribute receive-path corruption to the
+    /// bot(s) that stopped receiving, instead of restarting every bot.
+    last_audio_received_ms: std::sync::atomic::AtomicU64,
     /// UUID for the audio source, used for poking after start
     audio_source_uuid: Arc<StdMutex<Option<Uuid>>>,
     /// Track the content of the last message for efficient appending
@@ -90,10 +102,10 @@ impl DiscordBot {
             category_id,
             channel_id: parking_lot::Mutex::new(None),
             songbird: {
-                use std::num::NonZeroUsize;
+                use std::num::NonZeroU8;
                 let songbird_config = Config::default()
                     .decode_mode(DecodeMode::Decrypt)
-                    .playout_buffer_length(NonZeroUsize::new(7).unwrap())
+                    .playout_buffer_length(NonZeroU8::new(7).unwrap())
                     .playout_spike_length(3);
                 Songbird::serenity_from_config(songbird_config)
             },
@@ -108,9 +120,28 @@ impl DiscordBot {
             java_vm,
             java_bot_obj,
             user_id_to_username: Arc::new(DashMap::new()),
+            cache: parking_lot::Mutex::new(None),
+            last_audio_received_ms: std::sync::atomic::AtomicU64::new(0),
             audio_source_uuid: Arc::new(StdMutex::new(None)),
             last_message_content: Mutex::new(None),
         }
+    }
+
+    /// Store the gateway cache handle (called from the ready event).
+    pub fn set_cache(&self, cache: Arc<serenity::cache::Cache>) {
+        *self.cache.lock() = Some(cache);
+    }
+
+    /// Records that parseable voice audio just arrived (or that the session was
+    /// just (re)started, which also resets the staleness clock).
+    pub fn mark_audio_received(&self) {
+        self.last_audio_received_ms
+            .store(watchdog::now_ms(), Ordering::Relaxed);
+    }
+
+    /// Milliseconds since this bot last received parseable voice audio.
+    pub fn ms_since_last_audio(&self) -> u64 {
+        watchdog::now_ms().saturating_sub(self.last_audio_received_ms.load(Ordering::Relaxed))
     }
 
     /// Returns the UUID of the audio source, if set
@@ -354,14 +385,16 @@ impl DiscordBot {
                     info!("Successfully disconnected from call");
                     break;
                 },
+                // Match the variant directly: the Display string is
+                // "tried to leave a non-existent call" and does NOT contain
+                // "NoCall", so a string check here never matched and every
+                // no-op disconnect wasted 5 retries (2.5 seconds).
+                Err(songbird::error::JoinError::NoCall) => {
+                    info!("No active call to disconnect from; treating as success");
+                    break;
+                },
                 Err(error) => {
-                    // Check for NoCall error
-                    let error_str = format!("{}", error);
                     warn!(?error, "Failed to disconnect from the call: {error}");
-                    if error_str.contains("NoCall") {
-                        info!("Disconnect error is NoCall; treating as success and not retrying");
-                        break;
-                    }
                     tries += 1;
                     if tries < 5 {
                         info!("Trying to disconnect again in 500 milliseconds");
@@ -377,23 +410,41 @@ impl DiscordBot {
 
     #[tracing::instrument(skip(self), fields(self.category_id = %self.category_id, self.channel_id = ?self.channel_id))]
     pub fn stop(&self) -> Result<(), Report> {
-        let mut state_lock = self.state.write();
-        let State::Started { .. } = &*state_lock else {
-            info!("Bot is not started");
-            return Ok(());
+        let guild_id = {
+            let mut state_lock = self.state.write();
+            let State::Started { http, guild_id } = &*state_lock else {
+                info!("Bot is not started");
+                return Ok(());
+            };
+            let http = http.clone();
+            let guild_id = *guild_id;
+            info!("Stopping DiscordBot: transitioning from Started to LoggedIn with hard audio reset");
+            self.hard_reset_audio_state();
+            *state_lock = State::LoggedIn { http };
+            guild_id
         };
-        info!("Stopping DiscordBot: transitioning from Started to LoggedIn with hard audio reset");
-        self.hard_reset_audio_state();
-        *state_lock = match &*state_lock {
-            State::Started { http, .. } => State::LoggedIn { http: http.clone() },
-            _ => unreachable!(),
-        };
+        // Always leave the voice call. Previously stop() left the songbird Call
+        // (and its registered event handlers) alive; a later start() that reused
+        // it stacked duplicate VoiceTick handlers, and a stop without a start
+        // left the bot sitting in the VC with nothing consuming its audio.
+        crate::runtime::RUNTIME.block_on(self.disconnect(guild_id));
         Ok(())
     }
 
     pub fn block_for_speaking_opus_data(&self) -> Result<Vec<(String, u64, Vec<u8>)>, Report> {
         match self.discord_to_mc_buffer.received_audio_rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(data) => Ok(data),
+            Ok(mut data) => {
+                // Catch up on a small backlog per call so a briefly slow consumer
+                // recovers instead of lagging behind (and dropping ticks) forever.
+                // Capped so we never burst more than ~100ms of audio at once.
+                for _ in 0..4 {
+                    match self.discord_to_mc_buffer.received_audio_rx.try_recv() {
+                        Ok(more) => data.extend(more),
+                        Err(_) => break,
+                    }
+                }
+                Ok(data)
+            }
             Err(flume::RecvTimeoutError::Timeout) => {
                 Err(eyre::eyre!("no one is speaking (timeout waiting for audio)"))
             }
@@ -432,6 +483,77 @@ impl DiscordBot {
         let mut playout = buffer.playout_buffer.lock().unwrap();
         let stored = StoredPacket { opus: payload, decrypted: true, seq };
         playout.store_packet(stored);
+    }
+
+    /// Notifies the Java side about every user already sitting in the managed
+    /// voice channel. Without this, users who joined the VC before the bot
+    /// (e.g. across a server restart or config reload) are never tracked, which
+    /// silently gates off Minecraft -> Discord audio and join/leave handling.
+    pub async fn sync_channel_members(&self, channel_id: ChannelId, guild_id: GuildId, http: Arc<Http>) {
+        // The guild appears in the cache once GUILD_CREATE arrives; retry briefly.
+        let mut members: Option<Vec<(u64, Option<String>)>> = None;
+        for attempt in 0..10 {
+            let cache_opt = self.cache.lock().clone();
+            let Some(cache) = cache_opt else { break };
+            if let Some(guild) = cache.guild(guild_id) {
+                members = Some(
+                    guild
+                        .voice_states
+                        .iter()
+                        .filter(|(_, vs)| vs.channel_id == Some(channel_id))
+                        .map(|(uid, vs)| {
+                            (uid.get(), vs.member.as_ref().map(|m| m.display_name().to_string()))
+                        })
+                        .collect(),
+                );
+                break;
+            }
+            drop(cache);
+            if attempt < 9 {
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+            }
+        }
+        let Some(members) = members else {
+            warn!("Could not sync existing members of voice channel {channel_id}: guild {guild_id} not in cache");
+            return;
+        };
+        if members.is_empty() {
+            return;
+        }
+        info!("Syncing {} existing member(s) of voice channel {}", members.len(), channel_id);
+        for (user_id, name) in members {
+            let username = match name {
+                Some(n) => n,
+                None => match http.get_user(user_id.into()).await {
+                    Ok(user) => user.global_name.clone().unwrap_or_else(|| user.name.clone()),
+                    Err(_) => self
+                        .lookup_username(user_id)
+                        .unwrap_or_else(|| "Unknown User".to_string()),
+                },
+            };
+            self.update_username_mapping(user_id, &username);
+            let vm = Arc::clone(&self.java_vm);
+            let obj = self.java_bot_obj.clone();
+            let ch = channel_id.get();
+            let uname = username.clone();
+            // The Java handler is idempotent (skips users already tracked).
+            let _ = tokio::task::spawn_blocking(move || {
+                match vm.attach_current_thread() {
+                    Ok(mut env) => {
+                        crate::discord_bot::jni_bridge::notify_java_discord_user_voice_state(
+                            &mut env,
+                            obj.as_obj(),
+                            user_id,
+                            &uname,
+                            ch,
+                            true,
+                        );
+                    }
+                    Err(e) => warn!(?e, "Failed to attach JVM thread for voice member sync"),
+                }
+            })
+            .await;
+        }
     }
 
     /// Hard-reset in-memory audio state so restart can recover from stale/desynced buffers.
