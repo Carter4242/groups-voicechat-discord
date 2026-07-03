@@ -472,6 +472,10 @@ public final class GroupManager {
     public static void clearTrackedState() {
         discordUserChannelMap.clear();
         discordUserNameMap.clear();
+        // Also forget per-user volume categories: if this map kept stale
+        // entries across a reload, users rejoining would skip category
+        // re-registration (re-registering the same id is safe in SVC).
+        DiscordBot.discordUserCategoryMap.clear();
         groupPlayerMap.clear();
         groupOwnerMap.clear();
         synchronized (pendingJoinEvents) {
