@@ -562,6 +562,42 @@ impl DiscordBot {
         }
     }
 
+    /// Called from the client task when the gateway connection dies for good
+    /// (serenity's `client.start()` returned). Resets the state machine so
+    /// `logIn()` works again, tears down any stale voice call, and asks the
+    /// Java side to re-login with backoff.
+    ///
+    /// Runs inside the tokio runtime, so all blocking work is deferred.
+    pub fn handle_gateway_death(&self) {
+        let guild_id = {
+            let mut state_lock = self.state.write();
+            let guild_id = match &*state_lock {
+                State::Started { guild_id, .. } => Some(*guild_id),
+                _ => None,
+            };
+            *state_lock = State::NotLoggedIn;
+            guild_id
+        };
+        self.hard_reset_audio_state();
+        if let Some(guild_id) = guild_id {
+            let songbird = self.songbird.clone();
+            crate::runtime::RUNTIME.spawn(async move {
+                let _ = songbird.remove(guild_id).await;
+            });
+        }
+        let vm = Arc::clone(&self.java_vm);
+        let obj = self.java_bot_obj.clone();
+        let _ = tokio::task::spawn_blocking(move || match vm.attach_current_thread() {
+            Ok(mut env) => {
+                if let Err(e) = env.call_method(obj.as_obj(), "onGatewayDied", "()V", &[]) {
+                    let _ = env.exception_clear();
+                    warn!(?e, "Failed to call onGatewayDied on Java side");
+                }
+            },
+            Err(e) => warn!(?e, "Failed to attach JVM thread for gateway death recovery"),
+        });
+    }
+
     /// Hard-reset in-memory audio state so restart can recover from stale/desynced buffers.
     pub fn hard_reset_audio_state(&self) {
         self.audio_shutdown.store(true, Ordering::SeqCst);

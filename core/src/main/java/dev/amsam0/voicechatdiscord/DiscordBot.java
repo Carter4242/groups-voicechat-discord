@@ -959,6 +959,24 @@ public final class DiscordBot {
     }
     
     /**
+     * Whether this bot has been freed and must no longer be used.
+     */
+    public boolean isFreed() {
+        return freed || ptr == 0;
+    }
+
+    /**
+     * Called from Rust when the Discord gateway connection died for good
+     * (serenity gave up reconnecting). The Rust side has already reset its
+     * state machine to NotLoggedIn; re-login with backoff on the Java side.
+     */
+    public void onGatewayDied() {
+        if (freed || ptr == 0) return;
+        platform.error("Discord gateway connection died for bot (vcid=" + discordChannelId + "); attempting automatic re-login...");
+        GroupManager.recoverFromGatewayDeath(this);
+    }
+
+    /**
      * Called from Rust when the voice receive session appears corrupted
      * (sustained unparseable/undecryptable RTP) AND this bot received no
      * parseable audio during the error window. Rejoining the channel

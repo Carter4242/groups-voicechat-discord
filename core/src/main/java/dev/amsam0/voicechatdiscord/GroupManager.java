@@ -375,6 +375,64 @@ public final class GroupManager {
     }
 
     /**
+     * Re-logs a bot in after its gateway connection died permanently, with
+     * backoff (the death may be a network outage). Reconnects voice afterwards
+     * if the bot's group should be active. Holds the lifecycle lock for the
+     * whole recovery so manual restarts don't interleave.
+     */
+    public static void recoverFromGatewayDeath(DiscordBot bot) {
+        new Thread(() -> {
+            if (!bot.getLifecycleLock().tryLock()) {
+                platform.warn("Gateway died, but another bot lifecycle operation is in progress; skipping auto re-login (it may recover the bot itself).");
+                return;
+            }
+            try {
+                // Rust state is already NotLoggedIn; this just stops the audio thread.
+                bot.stop(false);
+
+                long[] delaysMs = {5_000, 15_000, 30_000, 60_000, 120_000};
+                for (int attempt = 0; attempt < delaysMs.length; attempt++) {
+                    try {
+                        Thread.sleep(delaysMs[attempt]);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    if (bot.isFreed()) return;
+                    if (!bot.logIn()) {
+                        platform.warn("Gateway re-login attempt " + (attempt + 1) + "/" + delaysMs.length + " failed; will retry.");
+                        continue;
+                    }
+
+                    UUID groupId = getGroupIdForBot(bot);
+                    if (groupId == null) {
+                        platform.info("Gateway re-login succeeded (vcid=" + bot.getDiscordChannelId() + "); bot has no linked group, staying idle.");
+                        return;
+                    }
+                    List<ServerPlayer> players = groupPlayerMap.get(groupId);
+                    boolean voiceNeeded = !isPermanentGroup(groupId) || (players != null && !players.isEmpty());
+                    if (!voiceNeeded) {
+                        platform.info("Gateway re-login succeeded (vcid=" + bot.getDiscordChannelId() + "); permanent group is empty, voice stays disconnected.");
+                        return;
+                    }
+                    if (startVoiceWithRetry(bot)) {
+                        bot.startDiscordAudioThread(groupId);
+                        platform.info("Gateway re-login succeeded and voice reconnected (vcid=" + bot.getDiscordChannelId() + ").");
+                    } else {
+                        platform.error("Gateway re-login succeeded but the voice reconnect failed (vcid=" + bot.getDiscordChannelId() + "). Use /dvcgroup restart.");
+                    }
+                    return;
+                }
+                platform.error("Gave up re-logging in after " + delaysMs.length + " attempts (vcid=" + bot.getDiscordChannelId() + "). Use /dvcgroup restart or restart the server.");
+            } catch (Throwable t) {
+                platform.error("Gateway death recovery failed", t);
+            } finally {
+                bot.getLifecycleLock().unlock();
+            }
+        }, "voicechat-discord: Gateway Recovery").start();
+    }
+
+    /**
      * Removes the Discord-side link for a group: Discord user audio channels and
      * volume categories, plus the group->bot association. Used when the bot is
      * stopped manually (dvcgroup stop) and when the group is removed.

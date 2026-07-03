@@ -34,6 +34,7 @@ impl super::DiscordBot {
         let token = self.token.clone();
         let songbird = self.songbird.clone();
         let bot_weak = Arc::downgrade(self);
+        let bot_weak_for_death = Arc::downgrade(self);
         let mut client_task = self.client_task.lock();
         // While this should never happen, it's better to catch it than leave it running
         if let Some(client_task) = &*client_task {
@@ -78,12 +79,30 @@ impl super::DiscordBot {
                         }
                     };
 
-                    if let Err(e) = client.start().await {
-                        tx.send(Err(Report::new(e)))
-                            .await
-                            .expect("log_in rx dropped - please file a GitHub issue");
-                    } else {
-                        info!("Bot finished");
+                    match client.start().await {
+                        Err(e) => {
+                            // If the initial login is still pending, report the
+                            // error to the waiting log_in() call.
+                            if tx.send(Err(Report::new(e))).await.is_err() {
+                                // rx is gone: we were logged in and the gateway
+                                // died afterwards (serenity gave up reconnecting).
+                                // This used to strand the bot in a dead LoggedIn
+                                // state until a server restart.
+                                warn!("Discord gateway client died after login; starting automatic recovery");
+                                if let Some(bot) = bot_weak_for_death.upgrade() {
+                                    bot.handle_gateway_death();
+                                }
+                            }
+                        },
+                        Ok(()) => {
+                            // A clean return still means the gateway is gone; we
+                            // never request a shutdown, so treat it as a death.
+                            // (Intentional teardown aborts this task instead.)
+                            info!("Bot gateway client finished; starting automatic recovery");
+                            if let Some(bot) = bot_weak_for_death.upgrade() {
+                                bot.handle_gateway_death();
+                            }
+                        },
                     }
                 })
                 .abort_handle(),
