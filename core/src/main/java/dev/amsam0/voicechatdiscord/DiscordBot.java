@@ -119,7 +119,9 @@ public final class DiscordBot {
         }
         final Long channelIdToDelete = discordChannelId;
         if (channelIdToDelete == null) {
-            platform.warn("No Discord channel to delete for vcid=null");
+            // Normal case: this bot/group never had a Discord channel created (or it was already
+            // deleted), so there is nothing to delete. Not worth a warning - it spams on shutdown.
+            platform.debug("No Discord channel to delete for vcid=null");
             if (afterDelete != null) afterDelete.run();
             return;
         }
