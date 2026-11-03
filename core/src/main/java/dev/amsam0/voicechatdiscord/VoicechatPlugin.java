@@ -5,16 +5,9 @@ import de.maxhenkel.voicechat.api.VoicechatServerApi;
 import de.maxhenkel.voicechat.api.events.*;
 
 import static dev.amsam0.voicechatdiscord.Constants.PLUGIN_ID;
-import static dev.amsam0.voicechatdiscord.Core.api;
 import static dev.amsam0.voicechatdiscord.Core.platform;
 
-public abstract class VoicechatPlugin implements de.maxhenkel.voicechat.api.VoicechatPlugin {
-    public VoicechatPlugin() {
-        ensurePlatformInitialized();
-    }
-
-    protected abstract void ensurePlatformInitialized();
-
+public final class VoicechatPlugin implements de.maxhenkel.voicechat.api.VoicechatPlugin {
     @Override
     public String getPluginId() {
         return PLUGIN_ID;
@@ -22,7 +15,7 @@ public abstract class VoicechatPlugin implements de.maxhenkel.voicechat.api.Voic
 
     @Override
     public void initialize(VoicechatApi serverApi) {
-        api = (VoicechatServerApi) serverApi;
+        Core.api = (VoicechatServerApi) serverApi;
         platform.info("Successfully initialized Simple Voice Chat plugin");
     }
 

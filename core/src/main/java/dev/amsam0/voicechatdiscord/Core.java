@@ -18,7 +18,7 @@ import java.util.UUID;
  * Core code between Paper.
  */
 public final class Core {
-    // Cached discord icon  
+    // Cached discord icon
     private static int[][] discordIcon = null;
     // Set of Discord user IDs (as Long) that are bots and should be ignored for join/leave
     public static final Set<Long> botUserIds = new HashSet<>();
@@ -48,9 +48,12 @@ public final class Core {
         }
 
         loadConfig();
+        GroupManager.startChannelNameUpdates();
     }
 
     public static void disable() {
+        GroupManager.stopChannelNameUpdates();
+
         int toShutdown = bots.size();
         platform.info("Shutting down " + toShutdown + " bot" + (toShutdown != 1 ? "s" : ""));
 
@@ -213,13 +216,9 @@ public final class Core {
 
         platform.info("Permanent bridge: group '" + permanentMcGroupName + "' <-> channel '" + permanentDiscordChannelName + "' (" + permanentDiscordChannelId + ")");
 
-        try {
-            debugLevel = (int) config.get("debug_level");
-            if (debugLevel > 0) platform.info("Debug level has been set to " + debugLevel);
-            setDebugLevel(debugLevel);
-        } catch (ClassCastException e) {
-            platform.error("Please make sure the debug_level option is a valid integer");
-        }
+        debugLevel = config.getInt("debug_level", 0);
+        if (debugLevel > 0) platform.info("Debug level has been set to " + debugLevel);
+        setDebugLevel(debugLevel);
     }
 
     /**

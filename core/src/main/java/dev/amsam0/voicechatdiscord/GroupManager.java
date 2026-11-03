@@ -49,12 +49,14 @@ public final class GroupManager {
 
     // Track last player count for each group to avoid unnecessary renames
     private static final Map<UUID, Integer> lastPlayerCounts = new ConcurrentHashMap<>();
-    // Timer for periodic VC name updates
-    private static final java.util.Timer vcUpdateTimer = new java.util.Timer(true);
+    // Periodic VC name updates (Discord rate-limits channel renames to 2 per 10 min).
+    // Owned by Core.enable/disable so a plugin reload doesn't leak the timer thread.
+    private static java.util.Timer vcUpdateTimer;
     private static final long VC_UPDATE_INTERVAL_MS = 310_000; // 5m 10s
 
-    static {
-        // Start periodic VC name updates for all Discord groups
+    static synchronized void startChannelNameUpdates() {
+        if (vcUpdateTimer != null) return;
+        vcUpdateTimer = new java.util.Timer("voicechat-discord: VC Name Updates", true);
         vcUpdateTimer.scheduleAtFixedRate(new java.util.TimerTask() {
             @Override
             public void run() {
@@ -63,6 +65,54 @@ public final class GroupManager {
                 }
             }
         }, 0, VC_UPDATE_INTERVAL_MS);
+    }
+
+    static synchronized void stopChannelNameUpdates() {
+        if (vcUpdateTimer != null) {
+            vcUpdateTimer.cancel();
+            vcUpdateTimer = null;
+        }
+    }
+
+    /** The voicechat group the player is in right now (any group, Discord-linked or not). */
+    public static Group getGroupOf(UUID playerUuid) {
+        if (Core.api == null) return null;
+        VoicechatConnection connection = Core.api.getConnectionOf(playerUuid);
+        return connection == null ? null : connection.getGroup();
+    }
+
+    /** Online players currently in the given voicechat group, straight from voicechat. */
+    public static List<ServerPlayer> getOnlineMembers(UUID groupId) {
+        List<ServerPlayer> members = new ArrayList<>();
+        if (Core.api == null || groupId == null) return members;
+        for (UUID playerUuid : platform.getOnlinePlayerUuids()) {
+            VoicechatConnection connection = Core.api.getConnectionOf(playerUuid);
+            if (connection == null || connection.getPlayer() == null) continue;
+            Group group = connection.getGroup();
+            if (group != null && groupId.equals(group.getId())) {
+                members.add(connection.getPlayer());
+            }
+        }
+        return members;
+    }
+
+    /**
+     * Links every existing voicechat group to Discord as if it had just been
+     * created. Groups only fire Create/Join events once, so this is how state is
+     * rebuilt after anything that dropped it: a hot (plugman) load of this plugin,
+     * or /dvcgroup reloadconfig. Owners are unknown afterwards (voicechat doesn't
+     * expose them), so only admins can stop/restart those groups' bots.
+     */
+    public static void resyncExistingGroups() {
+        if (Core.api == null) return;
+        ensurePermanentGroup();
+        for (Group group : Core.api.getGroups()) {
+            UUID groupId = group.getId();
+            if (isPermanentGroup(groupId) || group.hasPassword()) continue;
+            if (groupBotMap.containsKey(groupId) || pendingGroupCreations.containsKey(groupId)) continue;
+            if (getOnlineMembers(groupId).isEmpty()) continue;
+            linkGroupToDiscord(group, null, null);
+        }
     }
 
     private static List<ServerPlayer> getPlayers(Group group) {
@@ -602,7 +652,7 @@ public final class GroupManager {
                         if (i > 0) components.add(Component.white(", "));
                         components.add(Component.gold(discordUsers.get(i)));
                     }
-                        components.add(Component.blue("\n[Discord] ").append(Component.white("Use ")).append(Component.gold("/grm")).append(Component.white(" to chat with the group.")));
+                    components.add(Component.blue("\n[Discord] ").append(Component.white("Use ")).append(Component.gold("/g")).append(Component.white(" to chat with the group.")));
                     platform.sendMessage(player, components.toArray(new Component[0]));
                 }
             }
@@ -647,89 +697,89 @@ public final class GroupManager {
             platform.debug("someone created " + groupId + " (" + group.getName() + ")");
             return;
         }
-        ServerPlayer player = connection.getPlayer();
+        groupOwnerMap.put(groupId, connection.getPlayer().getUuid());
+        linkGroupToDiscord(group, connection.getPlayer(), connection);
+    }
 
-        // Track the owner of the group
-        groupOwnerMap.put(groupId, player.getUuid());
-
-        if (!Core.bots.isEmpty()) {
-            DiscordBot found = findAvailableBot();
-            if (found == null) {
-                platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")! All bots are started or already assigned.\n" +
-                    "Bot status: " + Core.bots.stream().map(b -> "started=" + b.isStarted() + ", assigned=" + groupBotMap.containsValue(b)).toList());
-                // Send a message to the player who created the group
-                Component message = Component.red("[Discord] ")
+    /**
+     * Creates a Discord voice channel for a (non-permanent) group and connects a
+     * free bot to it.
+     *
+     * @param creator the player who just created the group, who gets the usual join
+     *                handling and any error messages; null when relinking an existing
+     *                group (see {@link #resyncExistingGroups()}), whose current members
+     *                are then added quietly.
+     */
+    private static void linkGroupToDiscord(Group group, ServerPlayer creator, VoicechatConnection creatorConnection) {
+        UUID groupId = group.getId();
+        DiscordBot bot = findAvailableBot();
+        if (bot == null) {
+            String reason = Core.bots.isEmpty() ? "No Discord bots are configured." : "No Discord bots are available.";
+            platform.warn("Cannot link group " + group.getName() + " (" + groupId + ") to Discord: " + reason
+                + " Bot status: " + Core.bots.stream().map(b -> "started=" + b.isStarted() + ", assigned=" + groupBotMap.containsValue(b)).toList());
+            if (creator != null) {
+                platform.sendMessage(creator, Component.red("[Discord] ")
                     .append(Component.white("Unable to create Discord voice channel for group '"))
                     .append(Component.yellow(group.getName()))
-                    .append(Component.white("'. No Discord bots are available."));
-                platform.sendMessage(player, message);
+                    .append(Component.white("'. " + reason)));
+            }
+            return;
+        }
+        pendingGroupCreations.put(groupId, bot);
+        new Thread(() -> {
+            if (!bot.logIn()) {
+                platform.error("Failed to login to Discord for group " + group.getName() + " (" + groupId + ")");
+                pendingGroupCreations.remove(groupId);
                 return;
             }
-            final DiscordBot bot = found;
-            pendingGroupCreations.put(groupId, bot);
-            new Thread(() -> {
-                if (bot.logIn()) {
-                    bot.createDiscordVoiceChannelAsync(group.getName(), discordChannelId -> {
-                        if (discordChannelId == null) {
-                            platform.error("Failed to create Discord voice channel for group " + group.getName() + " (" + groupId + ")");
-                            pendingGroupCreations.remove(groupId);
+            bot.createDiscordVoiceChannelAsync(group.getName(), discordChannelId -> {
+                if (discordChannelId == null) {
+                    platform.error("Failed to create Discord voice channel for group " + group.getName() + " (" + groupId + ")");
+                    pendingGroupCreations.remove(groupId);
+                    return;
+                }
+
+                bot.getLifecycleLock().lock();
+                try {
+                    if (!startVoiceWithRetry(bot)) {
+                        platform.error("Failed to start voice connection for group " + group.getName() + " (" + groupId + "); deleting the Discord channel.");
+                        pendingGroupCreations.remove(groupId);
+                        bot.stop(); // deletes the channel
+                        if (creator != null) {
+                            platform.sendMessage(creator, Component.red("[Discord] "),
+                                Component.white("Failed to connect the Discord bot for group '"),
+                                Component.yellow(group.getName()),
+                                Component.white("'. Please try recreating the group."));
+                        }
+                        return;
+                    }
+
+                    pendingGroupCreations.remove(groupId);
+                    synchronized (removedBeforeCreation) {
+                        if (removedBeforeCreation.remove(groupId)) {
+                            platform.debug("Group " + groupId + " (" + group.getName() + ") was removed before Discord channel creation finished. Deleting channel.");
+                            bot.stop(); // deletes the channel
                             return;
                         }
+                    }
 
-                        bot.getLifecycleLock().lock();
-                        try {
-                            boolean started = startVoiceWithRetry(bot);
-                            if (!started) {
-                                platform.error("Failed to start voice connection for group " + group.getName() + " (" + groupId + "); deleting the Discord channel.");
-                                pendingGroupCreations.remove(groupId);
-                                bot.deleteDiscordVoiceChannelAsync();
-                                bot.stop();
-                                platform.sendMessage(player, Component.red("[Discord] "),
-                                    Component.white("Failed to connect the Discord bot for group '"),
-                                    Component.yellow(group.getName()),
-                                    Component.white("'. Please try recreating the group."));
-                                return;
-                            }
-
-                            pendingGroupCreations.remove(groupId);
-                            synchronized (removedBeforeCreation) {
-                                if (removedBeforeCreation.contains(groupId)) {
-                                    platform.debug("Group " + groupId + " (" + group.getName() + ") was removed before Discord channel creation finished. Deleting channel.");
-                                    bot.deleteDiscordVoiceChannelAsync();
-                                    removedBeforeCreation.remove(groupId);
-                                    bot.stop();
-                                    return;
-                                }
-                            }
-
-                            bot.startDiscordAudioThread(groupId);
-                            groupBotMap.put(groupId, bot);
-                            platform.debug("Linked groupId " + groupId + " (" + group.getName() + ") to bot (discordChannelId=" + discordChannelId + ")");
-                        } finally {
-                            bot.getLifecycleLock().unlock();
-                        }
-
-                        platform.debug(player.getUuid() + " (" + platform.getName(player) + ") created " + groupId + " (" + group.getName() + ")");
-
-                        List<ServerPlayer> players = getPlayers(group);
-                        players.add(player);
-                        handlePlayerJoin(group, player, connection, bot, players.size());
-                        processQueuedJoinEvents(groupId, group);
-                    });
-                } else {
-                    platform.error("Failed to login to Discord for group " + group.getName() + " (" + groupId + ")");
-                    pendingGroupCreations.remove(groupId);
+                    bot.startDiscordAudioThread(groupId);
+                    groupBotMap.put(groupId, bot);
+                    platform.debug("Linked groupId " + groupId + " (" + group.getName() + ") to bot (discordChannelId=" + discordChannelId + ")");
+                } finally {
+                    bot.getLifecycleLock().unlock();
                 }
-            }, "voicechat-discord: Bot AutoStart for Group").start();
-        } else {
-            platform.warn("No available Discord bots to assign to group " + group.getName() + " (" + groupId + ")");
-            // Send a message to the player who created the group
-            Component message = Component.red("[Discord] ")
-                .append(Component.white("Unable to create Discord voice channel for group '"))
-                .append(Component.yellow(group.getName()))
-                .append(Component.white("'. No Discord bots are configured."));
-            platform.sendMessage(player, message);
-        }
+
+                if (creator != null) {
+                    List<ServerPlayer> players = getPlayers(group);
+                    players.add(creator);
+                    handlePlayerJoin(group, creator, creatorConnection, bot, players.size());
+                } else {
+                    repopulateGroupPlayers(groupId, group);
+                }
+                processQueuedJoinEvents(groupId, group);
+            });
+        }, "voicechat-discord: Bot AutoStart for Group").start();
     }
 
     @SuppressWarnings("DataFlowIssue")

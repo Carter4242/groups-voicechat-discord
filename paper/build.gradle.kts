@@ -1,13 +1,9 @@
 plugins {
     java
     id("shared-plugins")
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.18"
 }
 
-val platformName = project.name
-
-val archivesBaseName = "${Properties.archivesBaseName}-${platformName}"
-val modrinthVersionName = "${platformName}-${Properties.pluginVersion}"
+val archivesBaseName = "${Properties.archivesBaseName}-${project.name}"
 
 project.version = Properties.pluginVersion
 project.group = Properties.mavenGroup
@@ -36,16 +32,21 @@ tasks.processResources {
     }
 }
 
+// The shaded jar is the plugin. It only uses the Bukkit/Paper API (no NMS), so it is
+// marked mojang-mapped: Paper then loads it as-is instead of remapping it, which stalls
+// the main thread for seconds on every hot load (plugman) of a new build.
 tasks.shadowJar {
     configurations = listOf(project.configurations.getByName("shadow"))
     relocate("org.bspfsystems.yamlconfiguration", "dev.amsam0.voicechatdiscord.shadow.yamlconfiguration")
     relocate("org.yaml.snakeyaml", "dev.amsam0.voicechatdiscord.shadow.snakeyaml")
-    relocate("com.github.zafarkhaja.semver", "dev.amsam0.voicechatdiscord.shadow.semver")
-    relocate("com.google.gson", "dev.amsam0.voicechatdiscord.shadow.gson")
 
     archiveBaseName.set(archivesBaseName)
     archiveClassifier.set("")
-    archiveVersion.set("${Properties.pluginVersion}-shadow")
+    archiveVersion.set(Properties.pluginVersion)
+
+    manifest {
+        attributes("paperweight-mappings-namespace" to "mojang")
+    }
 
     from(file("${rootDir}/LICENSE")) {
         rename { "${it}_${Properties.archivesBaseName}" }
@@ -58,53 +59,21 @@ tasks.jar {
     archiveVersion.set("${Properties.pluginVersion}-raw")
 }
 
-tasks.reobfJar {
-    // No idea why we didn't need to do this when we used Groovy, but this is necessary to have the correct jar filename (otherwise it will be paper-{VERSION}.jar)
-    outputJar.set(layout.buildDirectory.file("libs/${archivesBaseName}-${Properties.pluginVersion}.jar"))
-
-    dependsOn(tasks.jar.get())
-}
-
-tasks.assemble {
-    dependsOn(tasks.reobfJar.get())
-}
-
 tasks.build {
-    dependsOn(tasks.shadowJar.get())
+    dependsOn(tasks.shadowJar)
 }
 
 dependencies {
-    paperweight.paperDevBundle(Properties.paperDevBundleVersion)
-
+    compileOnly("io.papermc.paper:paper-api:${Properties.paperApiDependencyVersion}")
     compileOnly("de.maxhenkel.voicechat:voicechat-api:${Properties.voicechatApiVersion}")
 
     shadow("org.bspfsystems:yamlconfiguration:${Properties.yamlConfigurationVersion}")
-    shadow("com.github.zafarkhaja:java-semver:${Properties.javaSemverVersion}")
-    shadow("com.google.code.gson:gson:${Properties.gsonVersion}")
-
     shadow(project(":core"))
 }
 
 repositories {
     mavenCentral()
-    maven { url = uri("https://oss.sonatype.org/content/repositories/releases/") }
     maven { url = uri("https://repo.papermc.io/repository/maven-public/") }
     maven { url = uri("https://maven.maxhenkel.de/repository/public") }
-    maven { url = uri("https://jitpack.io") }
     mavenLocal()
-}
-
-modrinth {
-    token.set(System.getenv("MODRINTH_TOKEN"))
-    projectId.set(Properties.modrinthProjectId)
-    versionName.set(modrinthVersionName)
-    versionNumber.set(modrinthVersionName)
-    uploadFile.set(tasks.reobfJar.get().outputJar.get())
-    gameVersions.set(Properties.paperSupportedMinecraftVersions)
-    loaders.set(listOf("paper", "purpur"))
-    detectLoaders.set(false)
-    debugMode.set(System.getenv("MODRINTH_DEBUG") != null)
-    dependencies {
-        required.project("simple-voice-chat")
-    }
 }

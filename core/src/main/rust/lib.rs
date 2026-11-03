@@ -18,30 +18,44 @@ trait DisplayDebugThrow: Display + Debug {
 
 impl<T: Display + Debug> DisplayDebugThrow for T {}
 
-trait ResultExt<T> {
-    /// Discards the result if it is `Ok`, otherwise throws the error.
+trait ResultExt {
+    /// Discards the result if it is `Ok`, otherwise throws the error into Java.
     fn discard_or_throw(self, env: &mut JNIEnv<'_>);
-    /// Unwraps the result if it is `Ok`, otherwise throws the error and returns `value_on_throw`.
-    fn unwrap_or_throw(self, env: &mut JNIEnv<'_>, value_on_throw: T) -> T;
 }
 
-impl<T, E: Display + Debug> ResultExt<T> for Result<T, E> {
+impl<T, E: Display + Debug> ResultExt for Result<T, E> {
     fn discard_or_throw(self, env: &mut JNIEnv<'_>) {
         if let Err(e) = self {
             e.throw(env);
         }
     }
+}
 
-    fn unwrap_or_throw(self, env: &mut JNIEnv<'_>, value_on_throw: T) -> T {
-        match self {
-            Ok(r) => r,
-            Err(e) => {
-                e.throw(env);
-                value_on_throw
-            }
-        }
+/// Windows counterpart of build.rs's `-z nodelete`: pin this DLL so FreeLibrary
+/// (run when the old plugin classloader is collected after a reload) never unloads it.
+#[cfg(windows)]
+fn pin_library() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetModuleHandleExW(flags: u32, module_name: *const u16, module: *mut *mut std::ffi::c_void) -> i32;
+    }
+    const GET_MODULE_HANDLE_EX_FLAG_PIN: u32 = 0x1;
+    const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x4;
+    let mut module = std::ptr::null_mut();
+    let ok = unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            pin_library as *const u16,
+            &mut module,
+        )
+    };
+    if ok == 0 {
+        warn!("Failed to pin the native library; a plugin reload could crash the JVM");
     }
 }
+
+#[cfg(not(windows))]
+fn pin_library() {}
 
 #[no_mangle]
 pub extern "system" fn Java_dev_amsam0_voicechatdiscord_Core_initializeNatives<'local>(
@@ -49,6 +63,7 @@ pub extern "system" fn Java_dev_amsam0_voicechatdiscord_Core_initializeNatives<'
     _class: JClass<'local>,
 ) {
     logging::ensure_init();
+    pin_library();
     info!("Initializing rustls");
     if rustls::crypto::ring::default_provider()
         .install_default()

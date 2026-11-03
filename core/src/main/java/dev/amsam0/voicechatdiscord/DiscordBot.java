@@ -369,7 +369,7 @@ public final class DiscordBot {
         for (int i = 0; i < userPackets.length; i++) {
             byte[][] tuple = userPackets[i];
             if (tuple == null || tuple.length != 3) continue;
-            String username = new String(tuple[0]);
+            String username = new String(tuple[0], java.nio.charset.StandardCharsets.UTF_8);
             byte[] opusData = tuple[2];
             if (opusData != null && opusData.length > 0 && username != null && !username.isEmpty()) {
                 talkingUsersSet.add(username);
@@ -383,7 +383,7 @@ public final class DiscordBot {
         long now = System.currentTimeMillis();
         boolean usersChanged = !new java.util.HashSet<>(talkingUsers).equals(lastSentTalkingUsers);
         boolean timeout = (now - lastSentTime > 2000);
-        if ((usersChanged && talkingUsers.isEmpty()) || (usersChanged || (timeout && !talkingUsers.isEmpty()))) {
+        if (usersChanged || (timeout && !talkingUsers.isEmpty())) {
             lastSentTalkingUsers = new java.util.HashSet<>(talkingUsers);
             lastSentTime = now;
             Component[] msg;
@@ -421,7 +421,7 @@ public final class DiscordBot {
         for (int i = 0; i < userPackets.length; i++) {
             byte[][] tuple = userPackets[i];
             if (tuple == null || tuple.length != 3) continue;
-            String username = new String(tuple[0]);
+            String username = new String(tuple[0], java.nio.charset.StandardCharsets.UTF_8);
             // Extract Discord user ID from bytes using ByteBuffer
             long discordUserId = 0;
             if (tuple[1].length >= 8) {
@@ -459,7 +459,8 @@ public final class DiscordBot {
                             platform.error("[sendDiscordAudioToGroup] Failed to create StaticAudioChannel for player " + playerId + ", Discord user '" + username + "' (ID: " + discordUserId + ") in group " + groupId + " (vcid=" + discordChannelId + ")");
                         }
                     } else {
-                        platform.error("[sendDiscordAudioToGroup] Cannot create StaticAudioChannel: missing group, level, or connection for player " + playerId + " (vcid=" + discordChannelId + ")");
+                        // Per-packet path: debug only (a player changing worlds would flood the log)
+                        platform.debug("[sendDiscordAudioToGroup] Cannot create StaticAudioChannel: missing group, level, or connection for player " + playerId + " (vcid=" + discordChannelId + ")");
                         continue;
                     }
                 }

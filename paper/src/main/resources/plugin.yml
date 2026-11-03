@@ -7,3 +7,26 @@ authors: [ "amsam0", "Totobird" ]
 description: A plugin to make a bridge between Simple Voice Chat and Discord to allow for players without the mod to hear and speak.
 website: https://github.com/amsam0/voicechat-discord
 depend: [ voicechat ]
+
+# Plain plugin.yml commands (not Brigadier) so PlugManX can hot-load the plugin.
+# The server's commands.yml aliases /g to /grm.
+commands:
+  dvcgroup:
+    description: Manage the Discord bridge of your voice chat group.
+    usage: /dvcgroup <restart|stop|reloadconfig|message <text>>
+  dvcgroupmsg:
+    description: Chat with your voice chat group (and its Discord channel, if it has one).
+    usage: /<command> <message>
+    aliases: [ grm ]
+  cutaway:
+    description: Teleports your group to you after a delay, then back again.
+    usage: /cutaway <delay_seconds> <return_seconds>
+    permission: voicechat-discord.cutaway
+
+permissions:
+  voicechat-discord.reload-config:
+    description: /dvcgroup reloadconfig, and stop/restart of any group's bot.
+    default: op
+  voicechat-discord.cutaway:
+    description: /cutaway
+    default: op

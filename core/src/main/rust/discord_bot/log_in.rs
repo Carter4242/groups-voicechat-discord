@@ -40,11 +40,9 @@ impl super::DiscordBot {
         if let Some(client_task) = &*client_task {
             info!("Aborting previous client task");
             client_task.abort();
-            // Wait for it to finish or 20 seconds to pass
+            // Wait for it to finish or 10 seconds to pass
             let start = Instant::now();
-            while !client_task.is_finished()
-                && start.duration_since(Instant::now()) < Duration::from_secs(10)
-            {
+            while !client_task.is_finished() && start.elapsed() < Duration::from_secs(10) {
                 info!("Sleeping for client task to finish");
                 thread::sleep(Duration::from_millis(500));
             }
@@ -132,26 +130,16 @@ struct Handler {
 }
 
 impl Handler {
-    /// Extract display name from PartialMember: nick -> global_name -> username  
-    fn get_display_name_from_partial_member(member: &serenity::all::PartialMember) -> String {
-        member.nick
-            .clone()
-            .or_else(|| {
-                member.user.as_ref()
-                    .and_then(|user| user.global_name.clone())
-            })
-            .unwrap_or_else(|| {
-                member.user.as_ref()
-                    .map(|user| user.name.clone())
-                    .unwrap_or_else(|| "<unknown>".to_string())
-            })
-    }
-
-    /// Extract display name from User: global_name -> username
-    fn get_display_name_from_user(user: &serenity::all::User) -> String {
-        user.global_name
-            .clone()
-            .unwrap_or_else(|| user.name.clone())
+    /// Server nickname -> global display name -> username.
+    ///
+    /// MESSAGE_CREATE's `member` is a partial member WITHOUT `user` (Discord omits it
+    /// there), so the name fallbacks must come from `msg.author`, never `member.user`.
+    fn message_author_display_name(msg: &serenity::all::Message) -> String {
+        msg.member
+            .as_ref()
+            .and_then(|member| member.nick.clone())
+            .or_else(|| msg.author.global_name.clone())
+            .unwrap_or_else(|| msg.author.name.clone())
     }
 }
 
@@ -172,79 +160,74 @@ impl EventHandler for Handler {
         _old: Option<serenity::all::VoiceState>,
         new: serenity::all::VoiceState,
     ) {
+        let Some(bot) = self.bot.upgrade() else {
+            return;
+        };
         let user_id = new.user_id.get();
-        let username = new.member
-            .as_ref()
-            .map(|member| member.display_name().to_string())
-            .unwrap_or_else(|| {
+        let username = match new.member.as_ref() {
+            Some(member) => member.display_name().to_string(),
+            None => {
                 warn!("Voice state update for user {} has no member data", user_id);
-                "<unknown>".to_string()
-            });
-
-        if let Some(bot) = self.bot.upgrade() {
-            // Always update the user_id -> username map
-            bot.update_username_mapping(user_id, &username);
-
-            let mut env = bot.java_vm.attach_current_thread().expect("Failed to attach thread to JVM");
-            if let Some(channel_id) = new.channel_id {
-                // User joined or switched channel
-                crate::discord_bot::jni_bridge::notify_java_discord_user_voice_state(
-                    &mut env,
-                    bot.java_bot_obj.as_obj(),
-                    user_id,
-                    &username,
-                    channel_id.get(),
-                    true,
-                );
-            } else {
-                // User left all voice channels
-                crate::discord_bot::jni_bridge::notify_java_discord_user_voice_state(
-                    &mut env,
-                    bot.java_bot_obj.as_obj(),
-                    user_id,
-                    &username,
-                    0,
-                    false,
-                );
+                bot.lookup_username(user_id)
+                    .unwrap_or_else(|| "Unknown User".to_string())
             }
-        } else {
-            tracing::warn!("[voice_state_update] DiscordBot instance no longer exists");
-        }
+        };
+        bot.update_username_mapping(user_id, &username);
+
+        let mut env = match bot.java_vm.attach_current_thread() {
+            Ok(env) => env,
+            Err(e) => {
+                warn!(?e, "Failed to attach JVM thread for voice state update");
+                return;
+            }
+        };
+        // channel_id None = user left all voice channels (Java expects 0 + joined=false)
+        let (channel_id, joined) = match new.channel_id {
+            Some(channel_id) => (channel_id.get(), true),
+            None => (0, false),
+        };
+        super::jni_bridge::notify_java_discord_user_voice_state(
+            &mut env,
+            bot.java_bot_obj.as_obj(),
+            user_id,
+            &username,
+            channel_id,
+            joined,
+        );
     }
 
     async fn message(&self, _ctx: Context, msg: serenity::all::Message) {
-        if let Some(bot) = self.bot.upgrade() {
-            // Get the managed channel_id (voice channel) for this bot
-            let channel_id_opt = *bot.channel_id.lock();
-            if let Some(managed_channel_id) = channel_id_opt {
-                // Only forward messages sent in the managed channel
-                if msg.channel_id == managed_channel_id {
-                    let author_display_name = msg.member
-                        .as_ref()
-                        .map(|member| Self::get_display_name_from_partial_member(member))
-                        .unwrap_or_else(|| Self::get_display_name_from_user(&msg.author));
-
-                    let author_id = msg.author.id.get();
-                    let content = msg.content.clone();
-
-                    // Collect attachments as Vec<(String, String)>: (filename, url)
-                    let attachments: Vec<(String, String)> = msg.attachments.iter()
-                        .map(|a| (a.filename.clone(), a.url.clone()))
-                        .collect();
-
-                    // Attach to JVM and call Java handler
-                    let mut env = bot.java_vm.attach_current_thread().expect("Failed to attach thread to JVM");
-                    crate::discord_bot::jni_bridge::notify_java_discord_text_message(
-                        &mut env,
-                        bot.java_bot_obj.as_obj(),
-                        &author_display_name,
-                        author_id,
-                        &content,
-                        managed_channel_id.get(),
-                        &attachments,
-                    );
-                }
-            }
+        let Some(bot) = self.bot.upgrade() else {
+            return;
+        };
+        // Only forward messages sent in the bot's managed voice channel chat
+        let Some(managed_channel_id) = *bot.channel_id.lock() else {
+            return;
+        };
+        if msg.channel_id != managed_channel_id {
+            return;
         }
+        let attachments: Vec<(String, String)> = msg
+            .attachments
+            .iter()
+            .map(|a| (a.filename.clone(), a.url.clone()))
+            .collect();
+
+        let mut env = match bot.java_vm.attach_current_thread() {
+            Ok(env) => env,
+            Err(e) => {
+                warn!(?e, "Failed to attach JVM thread for Discord message");
+                return;
+            }
+        };
+        super::jni_bridge::notify_java_discord_text_message(
+            &mut env,
+            bot.java_bot_obj.as_obj(),
+            &Self::message_author_display_name(&msg),
+            msg.author.id.get(),
+            &msg.content,
+            managed_channel_id.get(),
+            &attachments,
+        );
     }
 }

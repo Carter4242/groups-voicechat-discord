@@ -2,6 +2,8 @@ package dev.amsam0.voicechatdiscord;
 
 import de.maxhenkel.voicechat.api.ServerPlayer;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -14,8 +16,8 @@ import static dev.amsam0.voicechatdiscord.Core.platform;
 public final class CutawayManager {
     // Map sessionId -> Map(ServerPlayer -> originalPosition)
     // This stores both the player and their original position for quick access
-    private static final Map<String, Map<ServerPlayer, PlayerPosition>> cutawaySessionPositions = new HashMap<>();
-    private static int cutawayCounter = 0;
+    private static final Map<String, Map<ServerPlayer, PlayerPosition>> cutawaySessionPositions = new ConcurrentHashMap<>();
+    private static final AtomicInteger cutawayCounter = new AtomicInteger();
 
     /**
      * Starts a cutaway session and teleports all players in a group to a target location.
@@ -25,13 +27,13 @@ public final class CutawayManager {
      * @return A session ID to be used when teleporting players back
      */
     public static String startCutaway(UUID groupId, PlayerPosition targetPosition, UUID initiatorUuid) {
-        List<ServerPlayer> players = GroupManager.groupPlayerMap.get(groupId);
-        if (players == null || players.isEmpty()) {
+        List<ServerPlayer> players = GroupManager.getOnlineMembers(groupId);
+        if (players.isEmpty()) {
             return null;
         }
 
         // Create a unique session ID for this cutaway
-        String sessionId = "cutaway_" + groupId + "_" + (cutawayCounter++);
+        String sessionId = "cutaway_" + groupId + "_" + cutawayCounter.getAndIncrement();
         Map<ServerPlayer, PlayerPosition> sessionPositions = new HashMap<>();
         cutawaySessionPositions.put(sessionId, sessionPositions);
 

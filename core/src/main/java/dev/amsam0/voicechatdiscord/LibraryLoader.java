@@ -1,44 +1,64 @@
 package dev.amsam0.voicechatdiscord;
 
-import org.jetbrains.annotations.Nullable;
-
 import java.io.File;
-import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 
 /**
- * Based on https://github.com/henkelmax/opus4j/blob/master/src/main/java/de/maxhenkel/opus4j/LibraryLoader.java
+ * Extracts the bundled native library and loads it.
  * <p>
- * Used with permission
+ * Reload-safe: the JVM binds a native library file to ONE classloader for as long
+ * as that classloader lives, and a plugin reload creates a new classloader while
+ * the old one is still alive. So every load extracts its own uniquely named copy.
+ * The old copy stays mapped for the rest of the process (the library is built
+ * NODELETE on Linux and pins itself on Windows), which keeps any threads it left
+ * behind safe.
+ * <p>
+ * Originally based on https://github.com/henkelmax/opus4j (used with permission).
  */
 public final class LibraryLoader {
     private static final String OS_NAME = System.getProperty("os.name").toLowerCase();
     private static final String OS_ARCH = System.getProperty("os.arch").toLowerCase();
 
-    private static boolean isWindows() {
-        return OS_NAME.contains("win");
+    private LibraryLoader() {
     }
 
-    private static boolean isLinux() {
-        return OS_NAME.contains("nux");
-    }
-    
-
-    private static String getPlatform() throws Exception {
-        if (isWindows()) {
-            return "windows";
-        } else if (isLinux()) {
-            return "linux";
-        } else {
-            throw new Exception(String.format("Unknown operating system: %s", OS_NAME));
+    public static void load(String libraryName) throws Exception {
+        boolean windows = OS_NAME.contains("win");
+        if (!windows && !OS_NAME.contains("nux")) {
+            throw new Exception("Unsupported operating system: " + OS_NAME);
         }
+        String platform = (windows ? "windows" : "linux") + "-" + architecture();
+        String fileName = windows ? libraryName + ".dll" : "lib" + libraryName + ".so";
+        String resourcePath = "natives/" + platform + "/" + fileName;
+
+        Path dir = Path.of(System.getProperty("java.io.tmpdir"), "voicechat-discord-natives");
+        Files.createDirectories(dir);
+        deleteStaleCopies(dir);
+
+        Path copy = Files.createTempFile(dir, libraryName + "-", windows ? ".dll" : ".so");
+        try (InputStream in = LibraryLoader.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (in == null) {
+                Files.deleteIfExists(copy);
+                throw new Exception("Could not find " + libraryName + " natives for platform " + platform);
+            }
+            Files.copy(in, copy, StandardCopyOption.REPLACE_EXISTING);
+        }
+
+        try {
+            System.load(copy.toAbsolutePath().toString());
+        } catch (UnsatisfiedLinkError e) {
+            Files.deleteIfExists(copy);
+            throw new Exception("Could not load " + libraryName + " natives for " + platform, e);
+        }
+        // Linux keeps the mapping after the file is unlinked. On Windows the delete
+        // fails while the DLL is loaded; deleteStaleCopies sweeps it up later.
+        copy.toFile().delete();
     }
 
-    private static String getArchitecture() {
+    private static String architecture() {
         return switch (OS_ARCH) {
             case "i386", "i486", "i586", "i686", "x86", "x86_32" -> "x86";
             case "amd64", "x86_64", "x86-64" -> "x64";
@@ -47,90 +67,19 @@ public final class LibraryLoader {
         };
     }
 
-    private static String getLibraryExtension() throws Exception {
-        if (isWindows()) {
-            return "dll";
-        } else if (isLinux()) {
-            return "so";
-        } else {
-            throw new Exception(String.format("Unknown operating system: %s", OS_NAME));
-        }
-    }
-
-    private static String getLibraryName(String name) throws Exception {
-        if (isWindows()) {
-            return String.format("%s.%s", name, getLibraryExtension());
-        } else {
-            return String.format("lib%s.%s", name, getLibraryExtension());
-        }
-    }
-
-    private static String getNativeFolderName() throws Exception {
-        return String.format("%s-%s", getPlatform(), getArchitecture());
-    }
-
-    private static String getResourcePath(String libName) throws Exception {
-        return String.format("natives/%s/%s", getNativeFolderName(), getLibraryName(libName));
-    }
-
-    private static File getTempDir() {
-        return new File(System.getProperty("java.io.tmpdir"));
-    }
-
-    public static void load(String libraryName) throws Exception {
-        String resourcePath = getResourcePath(libraryName);
-
-        @Nullable String md5 = null;
-        try (InputStream in = getResource(resourcePath)) {
-            if (in == null) {
-                throw new Exception(String.format("Could not find %s natives for platform %s", libraryName, getNativeFolderName()));
-            }
-            md5 = checksum(in);
-        } catch (Exception ignored) {
-        }
-
-        File tempDir = new File(getTempDir(), md5 == null ? libraryName : String.format("%s-%s", libraryName, md5));
-        tempDir.mkdirs();
-
-        File tempFile = new File(tempDir, getLibraryName(libraryName));
-
-        if (!tempFile.exists()) {
-            try (InputStream in = getResource(resourcePath)) {
-                if (in == null) {
-                    throw new Exception(String.format("Could not find %s natives for platform %s", libraryName, getNativeFolderName()));
-                }
-                Files.copy(in, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+    /**
+     * Best effort: copies still loaded by a running JVM can't be deleted on Windows.
+     * Skips fresh files so a second JVM sharing the temp dir is never raced mid-load.
+     */
+    private static void deleteStaleCopies(Path dir) {
+        File[] files = dir.toFile().listFiles();
+        if (files == null) return;
+        long cutoff = System.currentTimeMillis() - 60_000;
+        for (File file : files) {
+            if (file.lastModified() < cutoff) {
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
             }
         }
-
-        try {
-            System.load(tempFile.getAbsolutePath());
-        } catch (UnsatisfiedLinkError e) {
-            throw new Exception(String.format("Could not load %s natives for %s", libraryName, getNativeFolderName()), e);
-        }
-    }
-
-    @Nullable
-    private static InputStream getResource(String path) {
-        return LibraryLoader.class.getClassLoader().getResourceAsStream(path);
-    }
-
-    private static String checksum(InputStream inputStream) throws NoSuchAlgorithmException, IOException {
-        byte[] buffer = new byte[1024];
-        MessageDigest digest = MessageDigest.getInstance("MD5");
-        int numRead;
-        do {
-            numRead = inputStream.read(buffer);
-            if (numRead > 0) {
-                digest.update(buffer, 0, numRead);
-            }
-        } while (numRead != -1);
-        inputStream.close();
-        byte[] bytes = digest.digest();
-        StringBuilder result = new StringBuilder();
-        for (byte value : bytes) {
-            result.append(String.format("%02x", value));
-        }
-        return result.toString();
     }
 }

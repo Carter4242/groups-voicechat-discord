@@ -61,11 +61,19 @@ debug_level: 1             # 0-3, higher = more verbose
 4. When all members leave in game/group disbands, the Discord channel is auto-deleted
 
 ## Commands
-- `/dvcgroup stop` - Stop Discord bot, delete channel (group owner only)
-- `/dvcgroup restart` - Restart bot without deleting channel (group owner only)  
-- `/dvcgroup reloadconfig` - Reload the config
-- `/dvcgroupmsg <message>` - Send message to Discord channel and group members
-- `/grm <message>` - Alias for `/dvcgroupmsg`
+- `/dvcgroup stop` - Stop Discord bot, delete channel (group owner, or `voicechat-discord.reload-config`)
+- `/dvcgroup restart` - Restart bot without deleting channel (group owner, or `voicechat-discord.reload-config`)
+- `/dvcgroup reloadconfig` - Reload the config (`voicechat-discord.reload-config`)
+- `/dvcgroupmsg <message>` (alias `/grm`) - Chat with your voice chat group; also relayed to its Discord channel if it has one. Works in every group.
+- `/cutaway <delay_seconds> <return_seconds>` - Teleport your group to you, then back (`voicechat-discord.cutaway`)
+
+## Hot reload
+`plugman reload voicechat-discord` (PlugManX) works while Simple Voice Chat keeps running:
+commands are plain plugin.yml commands, `VoicechatAddonHotSwap` re-wires the SVC add-on
+(SVC itself only collects add-ons at its startup), each load uses a fresh copy of the native
+library (the JVM binds a library file to one classloader), and the jar is marked mojang-mapped
+so Paper doesn't remap it (seconds of main-thread stall) on every load. Non-permanent groups'
+Discord channels are deleted on unload and recreated on load.
 
 ## Discord Commands
 - `!pl`, `!plist`, or `!playerlist` - Display list of current players in the group
